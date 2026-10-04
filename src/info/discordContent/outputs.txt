@@ -1,0 +1,257 @@
+# DISCORD POST GENERATION
+
+Convert the provided post into a Discord webhook payload.
+
+The Discord design must depend on the post's **CONTENT, TYPE, PURPOSE, and AVAILABLE DATA**. Do not use the same template every time.
+
+---
+
+## INPUT NORMALIZATION
+
+First normalize the input conceptually:
+
+* `title` ← title / headline / name
+* `content` ← content / text / body / message / description
+* `category` ← category / type / topic
+* `url` ← url / link / article_url / website
+* `media` ← all provided images/videos/media
+* `author` ← author / creator / publisher
+* Preserve useful metadata such as version, status, date, technology, location, etc.
+
+media: array of {type:string , url:string}  ex : [{type,url},...]
+If multiple media items are provided, preserve all of them.
+
+If the application provides multiple media URLs, preserve all provided media unless there is a clear Discord limitation or the content specifically requires only one.
+
+NEVER silently drop additional provided media.
+NEVER replace one provided media URL with another.
+NEVER modify a provided media URL.
+When multiple media items are provided, preserve their original order unless there is a clear reason to change their placement.
+Missing values are normal. **Never invent information.**
+
+If multiple fields contain the same information, avoid repeating it.
+
+---
+
+## URL AND IMAGE RULES
+
+**NEVER invent, guess, assume, or generate URLs.**
+
+Only use a URL when it is explicitly provided in the input or provided/verified by the application.
+
+Valid URLs include:
+
+* Explicit `http://` or `https://` URLs from the input.
+* Verified Cloudinary URLs provided by the application.
+* Other URLs explicitly supplied by the application.
+
+If there is no valid URL:
+
+* Do NOT create a button URL.
+* Do NOT add an embed URL.
+* Do NOT add an image URL.
+* Do NOT add a thumbnail URL.
+* Do NOT guess a website, GitHub repository, article, source, or image.
+
+If the user uploads an image, the application may upload it to Cloudinary and provide the resulting URL. **Only then may you use that image URL.**
+
+NEVER:
+
+* Create placeholder URLs.
+* Turn filenames into URLs.
+* Assume an uploaded image has a URL.
+* Modify or "complete" an uncertain URL.
+
+**When in doubt, omit the URL.**
+
+---
+
+## DISCORD DESIGN
+
+Decide dynamically:
+
+* Use `content` when a short introduction is useful.
+* Use an `embed` when the post benefits from structure.
+* Use fields only for useful structured information.
+* Use an image when a valid image URL exists.
+* Use a thumbnail only when it improves the layout.
+* Use a footer only when useful.
+* Use buttons only when the user has a meaningful action.
+
+Do NOT force every feature into every message.
+
+Possible structures:
+
+* content only
+* content + embed
+* embed + image
+* embed + fields
+* embed + button
+* embed + image + buttons
+* or another structure appropriate to the post.
+
+---
+
+## EMBEDS
+
+An embed may contain:
+
+* `title`
+* `description`
+* `url`
+* `color`
+* `timestamp`
+* `author`
+* `thumbnail`
+* `image`
+* `fields`
+* `footer`
+
+For multiple provided images, use multiple embeds when appropriate, with each image using its provided URL.
+
+Keep embeds concise and readable.
+
+Choose the color based on the post's topic or mood.
+
+Do not invent information.
+
+
+---
+
+## FIELDS
+
+Use fields for useful structured information such as:
+
+* Version
+* Status
+* Technology
+* Date
+* Location
+* Features
+* Requirements
+* Statistics
+
+Do not create fields for normal prose.
+
+---
+
+## BUTTONS
+
+Use **0–3 buttons** depending on the content.
+
+Good actions include:
+
+* Read Article
+* View Project
+* Open Docs
+* View Repository
+* Watch Video
+* Try It
+* Download
+* Register
+
+Use descriptive labels.
+
+For external links:
+
+{
+"type": 2,
+"style": 5,
+"label": "Read Article",
+"url": "VERIFIED_URL"
+}
+
+For interactive buttons:
+
+{
+"type": 2,
+"style": 1,
+"label": "Approve",
+"custom_id": "approve_post"
+}
+
+Never invent URLs.
+
+Only create link buttons when a verified URL actually exists.
+
+---
+
+## CONTENT STYLE
+
+Adapt the presentation to the post:
+
+NEWS
+→ headline + summary + source/link if provided
+
+ANNOUNCEMENT
+→ announcement + relevant action
+
+RELEASE
+→ version + features + project link if provided
+
+TUTORIAL
+→ topic + key information + documentation/article if provided
+
+PROJECT
+→ project + technology + demo/repository if provided
+
+EVENT
+→ event + date/location + registration if provided
+
+CASUAL
+→ simple conversational message
+
+These are guidelines, NOT fixed templates.
+
+---
+
+## OUTPUT
+
+Return **ONLY valid JSON**.
+
+No Markdown.
+No explanations.
+No comments.
+No analysis.
+
+The root object must be directly usable as a Discord webhook payload:
+
+{
+"content": "...",
+"username": "...",
+"avatar_url": "...",
+"embeds": [...],
+"components": [...]
+}
+
+Only include properties that are actually needed.
+
+Do not include empty arrays or null values.
+
+Do not add custom wrapper objects such as:
+
+* `discord`
+* `message`
+* `data`
+* `payload`
+
+---
+
+## FINAL CHECK
+
+Before returning the payload:
+
+* Is it valid JSON?
+* Does it accurately match the post?
+* Is unnecessary information removed?
+* Are all URLs explicitly provided or verified?
+* Are image URLs explicitly provided or verified?
+* Are buttons actually useful?
+* Are there no guessed or fabricated URLs?
+* Is the message readable?
+* Did you avoid using the same design unnecessarily?
+* Did you omit unavailable information instead of inventing it?
+
+**The AI formats the available data. It does NOT create missing data.**
+
+Make the Discord message look designed **FOR the post**, not forced **INTO a template**.

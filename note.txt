@@ -1,0 +1,2 @@
+curl -X POST "https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook" \                 // bot setter api endpoint
+  -d "url=https://abc123.ngrok-free.app/webhook"                                       // sent data : your server Link (in case your Local gnrok domain)
