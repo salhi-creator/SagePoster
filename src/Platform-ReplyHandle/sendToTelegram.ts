@@ -1,9 +1,10 @@
 import axios from "axios";
-import type { TelegramPost } from "./types.js";
-
-export async function sendToTelegram(post: TelegramPost) {
+import type { TelegramPost,PostJobData } from "../Data-Structure/types.js";
+export async function sendToTelegram(post: TelegramPost ): Promise<void> {
   console.log("telePost:", post);
 
+ 
+ 
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.SAGEHUB_CHAT_ID;
 
@@ -274,10 +275,7 @@ export async function sendToTelegram(post: TelegramPost) {
     if (!messageId) {
       console.warn("⚠️ No message_id returned for reaction");
 
-      return {
-        media: mediaResults,
-        experiment: result,
-      };
+
     }
 
     const reactionResponse = await axios.post(`${api}/setMessageReaction`, {
@@ -308,8 +306,4 @@ export async function sendToTelegram(post: TelegramPost) {
   // FINAL RESULT
   // ==========================================
 
-  return {
-    media: mediaResults,
-    experiment: result,
-  };
 }

@@ -1,9 +1,9 @@
 import path from "path";
-import { FileReader, safeExtractJSON } from "../utilis.js";
-import { AIanswer } from "../AI.js";
-import { __dirname } from "../index.js";
+import { FileReader, safeExtractJSON } from "../../utilis.js";
+import { AIanswer } from "../../AI.js";
+import { __dirname } from "../../index.js";
 
-export async function DiscordData({
+ async function DiscordData({
   message,
   media,
 }: {
@@ -40,3 +40,5 @@ ${JSON.stringify(media, null, 2)}
     return null;
   }
 }
+
+export default DiscordData;

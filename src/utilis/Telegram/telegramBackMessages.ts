@@ -1,10 +1,10 @@
-import { FileReader, safeExtractJSON } from "../utilis.js";
+import { FileReader, safeExtractJSON } from "../../utilis.js";
 
 
-import {__dirname} from '../index.js'
+import {__dirname} from '../../index.js'
 import path from "node:path";
-import type { PostForm, AIOption as TelegramOptions } from "../info/types.js";
-import { telegramReactions } from "../info/types.js";
+import type { PostForm, AIOption as TelegramOptions  } from "../../Data-Structure/types.js";
+import {  telegramReactions } from "../../Data-Structure/types.js";
 
 
 
@@ -20,7 +20,7 @@ export async function telegramBackMessages(message: string, option: TelegramOpti
       __dirname,
       "info",
       "teleContent",
-      "Buttons.txt",
+      "outputs.txt",
     );
 
     const instruction = await FileReader(instructionPath);

@@ -6,9 +6,9 @@ import type {
   TeleBotButton,
   TelegramQuestion,
   TelegramPoll,
-} from "../info/types.js";
-
-import { AIanswer } from "../AI.js";
+} from "../../Data-Structure/types.js";
+import { AllPostStyles } from "../../Data-Structure/types.js";
+import { AIanswer } from "../../AI.js";
 
 async function getExperiment(
   style: PostStyle,
@@ -133,12 +133,17 @@ async function getExperiment(
   }
 }
 
-export async function prepareTelegramPost(
+async function prepareTelegramPost(
   aiResult: PostForm,
-): Promise<PostForm> {
+  scheduled = false,
+): Promise<PostForm | undefined> {
+  if (scheduled) {
+    const style = AllPostStyles[Math.floor(Math.random() * AllPostStyles.length)];
+  }
   const style = aiResult["post-style"];
   const telegram = aiResult.platforms.telegram;
 
+  if (!telegram) return;
   if (!telegram.enabled || !style) {
     return aiResult;
   }
@@ -158,3 +163,5 @@ export async function prepareTelegramPost(
     },
   };
 }
+
+export default prepareTelegramPost;

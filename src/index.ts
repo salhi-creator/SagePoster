@@ -1,12 +1,20 @@
 import express from "express";
 import http from "http";
 import dotenv from "dotenv";
-import { sendToTelegram } from "./info/sendToTelegram.js";
-import { sendToDiscord } from "./info/sendToDiscord.js";
+import { sendToTelegram } from "./Platform-ReplyHandle/sendToTelegram.js";
+import { sendToDiscord } from "./Platform-ReplyHandle/sendToDiscord.js";
 import { AIanswer } from "./AI.js";
-import { prepareTelegramPost } from "./utilis/telegramVariation.js";
+import prepareTelegramPost from "./utilis/Telegram/prepareTelegramPost.js";
 import { fileURLToPath } from "url";
-import { handleTelegramUpdate } from "./utilis.js";
+import { MediaCheck, sendMessageBackToMe } from "./utilis.js";
+import { schedulePost } from "./queues/postWorker.js";
+import type {
+  PostForm,
+  PostJobData,
+  Platform,
+} from "./Data-Structure/types.js";
+import { randomUUID } from "crypto";
+
 import path from "path";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,16 +33,25 @@ server.listen(port, () => {
   console.log(`Bot server is working on port ${port}`);
 });
 
+
+
 app.post("/webhook", async (req, res) => {
   console.log("📢 Channel:", req.body?.channel_post?.chat);
   // Telegram needs a quick response
   res.sendStatus(200);
-  console.log("🔥🔥🔥 WEBHOOK HIT");
-  // console.log("req ", req)
 
+  // You will handle the AI result here later
+
+  console.log("🔥🔥🔥 WEBHOOK HIT");
+  // console.log("req ", req);
+  let chatId = req.body?.message?.chat?.id;
+  console.log("MY ID", chatId);
+  let result: PostForm;
   try {
     // this will handle any vedios or photos save them to cloudinary and return reusable url
-    const urls_included = await handleTelegramUpdate(req.body);
+
+    // this func checks any Images , Vedios been sent
+    const urls_included = await MediaCheck(req.body);
 
     let message = req.body?.message?.text;
     // Ignore updates that don't contain a text message
@@ -48,25 +65,41 @@ app.post("/webhook", async (req, res) => {
     console.log("Received message:", message);
 
     // Send the received message to your AI function
-    const result = await AIanswer(message);
+    result = await AIanswer(message);
     console.log("AI result ", result);
-    if (result?.["current-state"] === "submit") {
-      if (result?.platforms.telegram.enabled) {
+
+    if (!result) return res.status(500);
+    if (result["current-state"] === "submit") {
+      if (result.platforms.telegram?.enabled) {
         const resultPost = await prepareTelegramPost(result);
-        await sendToTelegram(resultPost.platforms.telegram);
+        await sendToTelegram(resultPost?.platforms.telegram!!);
       }
 
       /*  if (result?.platforms.reddit.enabled) {
         await sendToReddit(result.platforms.reddit);
       }*/
 
-      if (result?.platforms.discord.enabled) {
+      if (result.platforms.discord?.enabled) {
         console.log("🚨 CALLING DISCORD");
-        await sendToDiscord(result.platforms.discord);
+        await sendToDiscord(result.platforms?.discord);
       }
+    } else if (result["current-state"] === "schedule-post") {
+      const id = randomUUID();
+
+      const PlatF: Platform[] = ["telegram", "discord", "linkedin", "reddit"];
+
+      let PostInfo: PostJobData = {
+        postId: id,
+        data: { ...result.platforms },
+        platforms: PlatF.filter((e) => result.platforms?.[e]?.enabled),
+
+        "dead-line": result["dead-line"],
+      };
+
+      schedulePost(PostInfo);
     }
 
-    // You will handle the AI result here later
+    await sendMessageBackToMe(chatId, result.report);
   } catch (error) {
     console.error("Webhook / AI error:", error);
   }

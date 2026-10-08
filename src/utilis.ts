@@ -1,12 +1,16 @@
-import type { PostForm } from "./info/types.js";
+import type { PostForm } from "./Data-Structure/types.js";
 import fs from "fs-extra";
 import dotenv from "dotenv";
 import {
   downloadTelegramFile,
   uploadBufferToCloudinary,
 } from "./utilis/cloudinary.js";
-
+import axios from "axios";
 dotenv.config();
+
+
+let urlSend = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
+
 /*export function safeExtractJSON(text:string,type:"object"|"array") : PostForm | null {
   try {
     // remove markdown
@@ -96,7 +100,7 @@ const albumStore = new Map<
   }
 >();
 
-export async function handleTelegramUpdate(update: any) {
+export async function MediaCheck(update: any) {
   const message = update.message;
 
   if (!message) {
@@ -289,4 +293,18 @@ ${message.text}
   }
 
   return "";
+}
+
+export async  function sendMessageBackToMe(chatId: string, report: string) {
+  try {
+    const call = await axios.post(urlSend, {
+      chat_id: chatId,
+      text: `${report}`,
+    });
+
+    return;
+  } catch (err) {
+    console.error("WEBHOOK ERROR | SEND MESSAGE BACK ERROR:", err);
+    return;
+  }
 }

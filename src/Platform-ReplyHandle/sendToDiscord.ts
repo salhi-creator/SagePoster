@@ -1,7 +1,7 @@
 import axios from "axios";
-import { DiscordData } from "../utilis/DiscordJsonData.js";
+import  DiscordData  from "../utilis/Discord/DiscordData.js";
 
-export async function sendToDiscord(content: {
+export async function sendToDiscord(content?: {
   enabled: boolean;
   content: string;
   media?: {
@@ -9,7 +9,7 @@ export async function sendToDiscord(content: {
     url: string | null;
   }[];
 }) {
-  if (!content.enabled) return;
+  if ( !content || !content.enabled ) return;
 
   const webhook = process.env.DISCORD_WEBHOOK_URL;
 

@@ -1,10 +1,10 @@
-import { FileReader } from "../utilis.js";
+import { FileReader } from "../../utilis.js";
 import path from "path";
-import { __dirname } from "../index.js";
+import { __dirname } from "../../index.js";
 
 let msg = "";
 
-export async function discordBackMessages(message: string): Promise<string> {
+ async function discordBackMessages(message: string): Promise<string> {
   /*
    * TELEGRAM STRUCTURES
    */
@@ -29,3 +29,6 @@ export async function discordBackMessages(message: string): Promise<string> {
 
   return msg;
 }
+
+
+export default discordBackMessages

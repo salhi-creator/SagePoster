@@ -11,6 +11,19 @@ export type PostStyle =
   | "self_aware"
   | "educational";
 
+export const AllPostStyles: PostStyle[] = [
+  "engagement",
+  "curiosity",
+  "joke",
+  "hot_take",
+  "poll",
+  "question",
+  "observation",
+  "reaction",
+  "experiment",
+  "self_aware",
+  "educational",
+];
 export type TelegramButton = {
   text: string;
 
@@ -23,7 +36,6 @@ export type TelegramButton = {
 export type TelegramPost = {
   enabled: boolean;
   content: string | null;
-  title: string | null;
   media: {
     type: "image" | "video" | null;
     url: "string" | null;
@@ -32,7 +44,7 @@ export type TelegramPost = {
 };
 
 export type PostForm = {
-  "current-state": "still-negotiate" | "submit";
+  "current-state": "still-negotiate" | "submit" | "schedule-post";
 
   intent: "create_post";
 
@@ -43,31 +55,31 @@ export type PostForm = {
   "post-style": PostStyle | null;
 
   platforms: {
-    telegram: TelegramPost;
+    telegram?: TelegramPost;
 
-    reddit: {
+    reddit?: {
       enabled: false;
-      subreddit: null;
-      title: null;
-      content: null;
+      subreddit: string;
+      title: string;
+      content: string;
       media: {
         type: "image" | "video" | null;
         url: "string" | null;
       }[];
     };
 
-    discord: {
+    discord?: {
       enabled: false;
-      content: null;
+      content: string;
       media: {
         type: "image" | "video" | null;
         url: "string" | null;
       }[];
     };
 
-    linkedin: {
+    linkedin?: {
       enabled: false;
-      content: null;
+      content: string;
       media: {
         type: "image" | "video" | null;
         url: "string" | null;
@@ -82,7 +94,32 @@ export type PostForm = {
 
     needs_review: boolean;
   };
+
+  "dead-line": {
+    "start-time": -1;
+    "end-time": -1;
+    repeat:
+      | "every-day"
+      | "every-hour"
+      | "every-week"
+      | "next-day"
+      | "next-hour"
+      | "next-week";
+  };
+  report: string;
 };
+
+export interface Deadline {
+  "start-time": number;
+  "end-time": number;
+  repeat:
+    | "every-day"
+    | "every-week"
+    | "every-hour"
+    | "next-day"
+    | "next-week"
+    | "next-hour";
+}
 
 export type TelegramExperiment =
   | {
@@ -145,3 +182,20 @@ export const telegramReactions = [
   "💯",
   "🥰",
 ];
+
+export type Platform = "telegram" | "discord" | "reddit" | "linkedin";
+
+export interface PostJobData {
+  postId: string;
+
+  platforms: Platform[];
+
+  data: {
+    telegram?: TelegramPost;
+    discord?: any;
+    reddit?: any;
+    linkedin?: any;
+  };
+
+  "dead-line": Deadline;
+}

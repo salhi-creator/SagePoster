@@ -6,10 +6,9 @@ import { gemini } from "./AIModels/Gemini.js";
 import { __dirname } from "./index.js";
 import path from "path";
 
-import type { PostForm, AIOption as TelegramOptions } from "./info/types.js";
-import { telegramReactions } from "./info/types.js";
-import { telegramBackMessages } from "./utilis/telegramBackMessages.js";
-import { discordBackMessages } from "./utilis/DiscordHandleMessage.js";
+import type { PostForm, AIOption as TelegramOptions } from "./Data-Structure/types.js";
+import { telegramBackMessages } from "./utilis/Telegram/telegramBackMessages.js";
+import  discordBackMessages  from "./utilis/Discord/discordBackMessages.js";
 let msg = "";
 
 export async function AIanswer(
