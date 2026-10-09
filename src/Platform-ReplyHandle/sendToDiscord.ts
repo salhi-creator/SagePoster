@@ -27,8 +27,17 @@ export async function sendToDiscord(content?: {
 
   console.log("discord Data", Data);
 
+  return sendDiscordPayload(Data);
+}
+
+export async function sendDiscordPayload(payload: Record<string, unknown>) {
+  const webhook = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhook) {
+    throw new Error("DISCORD_WEBHOOK_URL is missing");
+  }
+
   try {
-    const response = await axios.post(webhook, Data);
+    const response = await axios.post(webhook, payload);
 
     console.log("✅ Discord post sent:", response.status);
     console.log("🟢 DISCORD: webhook finished", response.status);

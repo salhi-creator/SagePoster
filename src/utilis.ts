@@ -91,11 +91,12 @@ const albumStore = new Map<
     urls: {
       messageId: number;
       url: string;
+      type: "image" | "video";
     }[];
     caption: string;
     timer?: NodeJS.Timeout;
     waiters: {
-      resolve: (value: string | null) => void;
+      resolve: (value: string) => void;
     }[];
   }
 >();
@@ -113,14 +114,20 @@ export async function MediaCheck(update: any) {
    * =========================
    */
 
-  if (message.media_group_id && message.photo?.length) {
+  const photo = message.photo?.length
+    ? message.photo[message.photo.length - 1]
+    : undefined;
+  const video = message.video;
+  const mediaFile = photo ?? video;
+  const mediaType: "image" | "video" = photo ? "image" : "video";
+
+  if (message.media_group_id && mediaFile) {
     const groupId = message.media_group_id;
-
-    const largestPhoto = message.photo[message.photo.length - 1];
-
-    const buffer = await downloadTelegramFile(largestPhoto.file_id);
-
-    const url = await uploadBufferToCloudinary(buffer, "image");
+    const buffer = await downloadTelegramFile(mediaFile.file_id);
+    const url = await uploadBufferToCloudinary(
+      buffer,
+      mediaType === "image" ? "image" : "video",
+    );
 
     let album = albumStore.get(groupId);
 
@@ -142,6 +149,7 @@ export async function MediaCheck(update: any) {
     album.urls.push({
       messageId: message.message_id,
       url,
+      type: mediaType,
     });
 
     /*
@@ -160,14 +168,14 @@ export async function MediaCheck(update: any) {
       clearTimeout(album.timer);
     }
 
-    const result = await new Promise<string | null>((resolve) => {
+    const result = await new Promise<string>((resolve) => {
       album!.waiters.push({ resolve });
 
       album!.timer = setTimeout(() => {
         const currentAlbum = albumStore.get(groupId);
 
         if (!currentAlbum) {
-          resolve(null);
+          resolve("");
           return;
         }
 
@@ -194,7 +202,7 @@ export async function MediaCheck(update: any) {
             (item) => `
 MEDIA INFO:
 
-type: image
+type: ${item.type}
 
 url: ${item.url}
 `,
@@ -218,7 +226,8 @@ ${currentAlbum.caption}
           if (index === waiters.length - 1) {
             waiter.resolve(finalMessage);
           } else {
-            waiter.resolve(null);
+            // Only one webhook update should trigger AI generation for an album.
+            waiter.resolve("");
           }
         });
       }, 1000);
@@ -233,10 +242,8 @@ ${currentAlbum.caption}
    * =========================
    */
 
-  if (message.photo?.length) {
-    const largestPhoto = message.photo[message.photo.length - 1];
-
-    const buffer = await downloadTelegramFile(largestPhoto.file_id);
+  if (photo) {
+    const buffer = await downloadTelegramFile(photo.file_id);
 
     const url = await uploadBufferToCloudinary(buffer, "image");
 
@@ -260,8 +267,8 @@ ${message.caption ?? ""}
    * =========================
    */
 
-  if (message.video) {
-    const buffer = await downloadTelegramFile(message.video.file_id);
+  if (video) {
+    const buffer = await downloadTelegramFile(video.file_id);
 
     const url = await uploadBufferToCloudinary(buffer, "video");
 

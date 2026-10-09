@@ -18,7 +18,7 @@ export async function telegramBackMessages(message: string, option: TelegramOpti
   if (option) {
     const instructionPath = path.join(
       __dirname,
-      "info",
+      "Prompts",
       "teleContent",
       "outputs.txt",
     );

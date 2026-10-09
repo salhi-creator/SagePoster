@@ -38,9 +38,18 @@ export type TelegramPost = {
   content: string | null;
   media: {
     type: "image" | "video" | null;
-    url: "string" | null;
+    url: string | null;
   }[];
   experiment?: TelegramExperiment;
+};
+
+export type DiscordPost = {
+  enabled: boolean;
+  content: string;
+  media: {
+    type: "image" | "video" | null;
+    url: string | null;
+  }[];
 };
 
 export type PostForm = {
@@ -64,25 +73,18 @@ export type PostForm = {
       content: string;
       media: {
         type: "image" | "video" | null;
-        url: "string" | null;
+        url: string | null;
       }[];
     };
 
-    discord?: {
-      enabled: false;
-      content: string;
-      media: {
-        type: "image" | "video" | null;
-        url: "string" | null;
-      }[];
-    };
+    discord?: DiscordPost;
 
     linkedin?: {
       enabled: false;
       content: string;
       media: {
         type: "image" | "video" | null;
-        url: "string" | null;
+        url: string | null;
       }[];
     };
   };
@@ -95,17 +97,7 @@ export type PostForm = {
     needs_review: boolean;
   };
 
-  "dead-line": {
-    "start-time": -1;
-    "end-time": -1;
-    repeat:
-      | "every-day"
-      | "every-hour"
-      | "every-week"
-      | "next-day"
-      | "next-hour"
-      | "next-week";
-  };
+  "dead-line": Deadline;
   report: string;
 };
 
@@ -144,6 +136,30 @@ export type TelegramExperiment =
       type: "none";
     };
 
+export interface ScheduledTelegramInput {
+  topic: string;
+  instruction: string;
+  media: TelegramPost["media"];
+  recentPosts: string[];
+}
+
+export type ScheduledTelegramOutput = {
+  content: string;
+  experiment: TelegramExperiment;
+};
+
+export interface ScheduledDiscordInput {
+  topic: string;
+  instruction: string;
+  media: DiscordPost["media"];
+  recentPosts: string[];
+}
+
+export type ScheduledDiscordOutput = {
+  historyText: string;
+  payload: Record<string, unknown>;
+};
+
 export interface TeleBotButton {
   text: string;
   callback_data: string;
@@ -159,11 +175,15 @@ export interface TelegramQuestion {
 }
 
 export type AIOption =
+  | "sheduled-telegram"
+  | "scheduled-discord"
   | "tele-button"
   | "tele-reaction"
   | "tele-poll"
   | "tele-question"
-  | "discord";
+  | "discord"
+  | "reddit"
+  | "linkedin";
 
 export const telegramReactions = [
   "👍",
@@ -190,12 +210,5 @@ export interface PostJobData {
 
   platforms: Platform[];
 
-  data: {
-    telegram?: TelegramPost;
-    discord?: any;
-    reddit?: any;
-    linkedin?: any;
-  };
-
-  "dead-line": Deadline;
+  form: PostForm;
 }

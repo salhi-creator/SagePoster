@@ -259,7 +259,7 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
 
   console.log("📨 Telegram main response:", JSON.stringify(result, null, 2));
 
-  if (!result.ok) {
+  if (result && !result.ok) {
     throw new Error(
       `Telegram ${experimentType ?? "message"} error: ${result.description}`,
     );

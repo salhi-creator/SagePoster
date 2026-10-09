@@ -2,16 +2,17 @@ import { Worker, Job } from "bullmq";
 import { postQueue } from "./postQueue.js";
 
 import { sendToTelegram } from "../Platform-ReplyHandle/sendToTelegram.js";
-import { sendToDiscord } from "../Platform-ReplyHandle/sendToDiscord.js";
 // import { sendToReddit } from "../Platform-ReplyHandle/sendToReddit.js";
 // import { sendToLinkedIn } from "../Platform-ReplyHandle/sendToLinkedIn.js";
 import handleSchedulePost from "../utilis/Telegram/handleSchedulePost.js";
+import handleScheduleDiscord from "../utilis/Discord/handleScheduleDiscord.js";
 import type {
   Deadline,
   Platform,
+  PostForm,
   PostJobData,
-  TelegramPost
 } from "../Data-Structure/types.js";
+import { randomUUID } from "node:crypto";
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: Number(process.env.REDIS_PORT || 6379),
@@ -19,10 +20,15 @@ const connection = {
   password: process.env.REDIS_PASSWORD || undefined,
 };
 
-export async function schedulePost(postData: PostJobData) {
-  const repeat = postData["dead-line"]["repeat"];
-  const endTime = postData["dead-line"]["end-time"];
-  const startTime = postData["dead-line"]["start-time"];
+export async function schedulePost(form: PostForm) {
+  const postId = randomUUID();
+  const platforms = (Object.keys(form.platforms) as Platform[]).filter(
+    (platform) => form.platforms[platform]?.enabled,
+  );
+  const postData: PostJobData = { postId, platforms, form };
+  const repeat = form["dead-line"]["repeat"];
+  const endTime = form["dead-line"]["end-time"];
+  const startTime = form["dead-line"]["start-time"];
 
   const isRecurring =
     repeat === "every-hour" ||
@@ -159,7 +165,7 @@ function getCronPattern(repeat: Deadline["repeat"]): string {
 */
 
 async function handlePostJob(job: Job<PostJobData>) {
-  const { postId, platforms, data } = job.data;
+  const { postId, platforms, form } = job.data;
 
   console.log(`[BullMQ] Processing post ${postId} -> ${platforms.join(",")}`);
 
@@ -170,7 +176,7 @@ async function handlePostJob(job: Job<PostJobData>) {
    */
 
   if (platforms.includes("telegram")) {
-    if (!data.telegram) {
+    if (!form.platforms.telegram) {
       throw new Error(
         `Post ${postId}: Telegram is enabled but no Telegram data was provided`,
       );
@@ -180,12 +186,10 @@ async function handlePostJob(job: Job<PostJobData>) {
 
     try {
       // scheduled Post
-      type scheduleTelePost = Omit<
-        TelegramPost,
-        "experiment" | "media" | "enabled"
-      >;
-      const SchPost: scheduleTelePost = { content: data.telegram.content };
-      await handleSchedulePost(SchPost as { content: string });
+      if (!form.platforms.telegram.content) {
+        throw new Error(`Post ${postId}: Telegram content is empty`);
+      }
+      await handleSchedulePost(form.platforms.telegram, form.topic);
 
       console.log(`[BullMQ] Post ${postId} successfully sent to Telegram`);
     } catch (error) {
@@ -200,7 +204,7 @@ async function handlePostJob(job: Job<PostJobData>) {
    */
 
   if (platforms.includes("discord")) {
-    if (!data.discord) {
+    if (!form.platforms.discord) {
       throw new Error(
         `Post ${postId}: Discord is enabled but no Discord data was provided`,
       );
@@ -209,7 +213,7 @@ async function handlePostJob(job: Job<PostJobData>) {
     console.log(`[BullMQ] Posting ${postId} to Discord...`);
 
     try {
-      //results.discord = await sendToDiscord(data.discord);
+      await handleScheduleDiscord(form.platforms.discord, form.topic);
 
       console.log(`[BullMQ] Post ${postId} successfully sent to Discord`);
     } catch (error) {

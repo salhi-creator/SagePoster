@@ -8,12 +8,13 @@ import prepareTelegramPost from "./utilis/Telegram/prepareTelegramPost.js";
 import { fileURLToPath } from "url";
 import { MediaCheck, sendMessageBackToMe } from "./utilis.js";
 import { schedulePost } from "./queues/postWorker.js";
+import {
+  savePublishedDiscordPost,
+  savePublishedTelegramPost,
+} from "./SQL_DB/connectDB.js";
 import type {
   PostForm,
-  PostJobData,
-  Platform,
 } from "./Data-Structure/types.js";
-import { randomUUID } from "crypto";
 
 import path from "path";
 
@@ -72,7 +73,17 @@ app.post("/webhook", async (req, res) => {
     if (result["current-state"] === "submit") {
       if (result.platforms.telegram?.enabled) {
         const resultPost = await prepareTelegramPost(result);
-        await sendToTelegram(resultPost?.platforms.telegram!!);
+        const telegramPost = resultPost?.platforms.telegram;
+        if (telegramPost) {
+          await sendToTelegram(telegramPost);
+          if (result.topic && telegramPost.content) {
+            try {
+              await savePublishedTelegramPost(result.topic, telegramPost.content);
+            } catch (error) {
+              console.error("Telegram post sent, but history could not be saved:", error);
+            }
+          }
+        }
       }
 
       /*  if (result?.platforms.reddit.enabled) {
@@ -82,21 +93,19 @@ app.post("/webhook", async (req, res) => {
       if (result.platforms.discord?.enabled) {
         console.log("🚨 CALLING DISCORD");
         await sendToDiscord(result.platforms?.discord);
+        if (result.topic && result.platforms.discord.content) {
+          try {
+            await savePublishedDiscordPost(
+              result.topic,
+              result.platforms.discord.content,
+            );
+          } catch (error) {
+            console.error("Discord post sent, but history could not be saved:", error);
+          }
+        }
       }
     } else if (result["current-state"] === "schedule-post") {
-      const id = randomUUID();
-
-      const PlatF: Platform[] = ["telegram", "discord", "linkedin", "reddit"];
-
-      let PostInfo: PostJobData = {
-        postId: id,
-        data: { ...result.platforms },
-        platforms: PlatF.filter((e) => result.platforms?.[e]?.enabled),
-
-        "dead-line": result["dead-line"],
-      };
-
-      schedulePost(PostInfo);
+      await schedulePost(result);
     }
 
     await sendMessageBackToMe(chatId, result.report);

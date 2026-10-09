@@ -10,7 +10,7 @@ let msg = "";
    */
   const instructionPath = path.join(
     __dirname,
-    "info",
+    "Prompts",
     "discordContent",
     "outputs.txt",
   );
