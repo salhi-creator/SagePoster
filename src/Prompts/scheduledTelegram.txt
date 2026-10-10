@@ -18,7 +18,9 @@ Also choose one Telegram experiment that fits the new post. Return `{"type":"non
 - `{"type":"question","question":"..."}`
 - `{"type":"reaction","emoji":["🔥"]}`
 - `{"type":"buttons","buttons":[{"text":"...","callback_data":"..."}]}`
-- `{"type":"poll","question":"...","options":["...","..."],"is_anonymous":true}`
+- `{"type":"poll","question":"...","options":["...","..."],"durationHours":24,"is_anonymous":true}`
+
+For polls, choose `durationHours` by topic urgency: 1–4 for time-sensitive, 12 for short-lived discussion, 24 for general topics, or 72 for evergreen topics. Keep it between 1 and 720 hours.
 
 Return only valid JSON in this exact shape:
 {

@@ -67,13 +67,16 @@ app.post("/webhook", async (req, res) => {
     // this will handle any vedios or photos save them to cloudinary and return reusable url
 
     // this func checks any Images , Vedios been sent
-    const urls_included = await MediaCheck(req.body);
-    console.info("[Webhook] Media processing complete", { requestId });
+    const processedMedia = await MediaCheck(req.body);
+    console.info("[Webhook] Media processing complete", {
+      requestId,
+      mediaCount: processedMedia.media.length,
+    });
 
     let message = req.body?.message?.text;
     // Ignore updates that don't contain a text message
     if (!message) {
-      message = urls_included;
+      message = processedMedia.prompt;
       if (message === undefined || message?.trim() === "") {
         return;
       }
@@ -89,6 +92,17 @@ app.post("/webhook", async (req, res) => {
         await sendMessageBackToMe(chatId, "I could not process that request. Please try again.");
       }
       return;
+    }
+      console.info("[AI] Received Data", result);
+
+    // Keep uploaded media authoritative; the planner should not drop album items.
+    if (processedMedia.media.length > 0) {
+      if (result.platforms.telegram) {
+        result.platforms.telegram.media = processedMedia.media;
+      }
+      if (result.platforms.discord) {
+        result.platforms.discord.media = processedMedia.media;
+      }
     }
     console.info("[Webhook] Planner completed", {
       requestId,

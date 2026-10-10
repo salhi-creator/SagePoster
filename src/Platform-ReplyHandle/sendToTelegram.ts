@@ -1,6 +1,36 @@
 import axios from "axios";
-import type { TelegramPost,PostJobData } from "../Data-Structure/types.js";
+import type { TelegramPost } from "../Data-Structure/types.js";
 import { logError } from "../utilis/logError.js";
+
+const imageExtensions: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+async function downloadMediaFile(url: string, index: number) {
+  try {
+    const response = await axios.get<ArrayBuffer>(url, {
+      responseType: "arraybuffer",
+      timeout: 60_000,
+      maxContentLength: 50 * 1024 * 1024,
+    });
+    const contentType = String(response.headers["content-type"] ?? "application/octet-stream")
+      .split(";")[0]
+      ?.trim() ?? "application/octet-stream";
+    const ext = imageExtensions[contentType] ?? (contentType === "video/mp4" ? "mp4" : "bin");
+
+    return {
+      filename: `media-${index + 1}.${ext}`,
+      blob: new Blob([new Uint8Array(response.data)], { type: contentType }),
+    };
+  } catch (error) {
+    logError("Telegram media download failed", error, { mediaIndex: index + 1 });
+    throw error;
+  }
+}
+
 export async function sendToTelegram(post: TelegramPost ): Promise<void> {
 
 
@@ -53,9 +83,30 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
   if (experimentType === "poll") {
     endpoint = "sendPoll";
 
+    if (
+      post.experiment?.type !== "poll" ||
+      typeof post.experiment.question !== "string" ||
+      !post.experiment.question.trim() ||
+      post.experiment.question.length > 300 ||
+      !Array.isArray(post.experiment.options) ||
+      post.experiment.options.length < 2 ||
+      post.experiment.options.length > 12 ||
+      post.experiment.options.some(
+        (option) =>
+          typeof option !== "string" || !option.trim() || option.length > 100,
+      )
+    ) {
+      throw new Error("Cannot send Telegram poll: question and 2–12 non-empty options are required");
+    }
+
     body.question = post.experiment?.question;
     body.options = post.experiment?.options;
-
+    const requestedHours =
+      post.experiment?.type === "poll" ? post.experiment.durationHours : undefined;
+    const durationHours = Number.isFinite(requestedHours)
+      ? Math.min(720, Math.max(1, Math.round(requestedHours as number)))
+      : 24;
+    body.open_period = durationHours * 60 * 60;
     body.is_anonymous = post.experiment?.is_anonymous ?? true;
   }
 
@@ -75,10 +126,18 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     endpoint = "sendMessage";
 
     body.text = post.content;
+    const buttons =
+      post.experiment?.type === "buttons" ? post.experiment.buttons : [];
+    const inlineKeyboard = Array.from(
+      { length: Math.ceil(buttons.length / 2) },
+      (_, row) => buttons.slice(row * 2, row * 2 + 2),
+    );
 
-    body.reply_markup = {
-      inline_keyboard: post.experiment?.buttons,
-    };
+    if (inlineKeyboard.length > 0) {
+      body.reply_markup = { inline_keyboard: inlineKeyboard };
+    } else {
+      console.warn("[Telegram] No buttons returned; sending post without keyboard");
+    }
   }
 
   // ------------------------------------------
@@ -115,10 +174,23 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
   // ==========================================
 
   const mediaResults: any[] = [];
+  const specialMessage = ["poll", "question", "buttons", "reaction"].includes(
+    experimentType ?? "",
+  );
+  // Buttons and reactions send the post text as a separate Telegram message,
+  // so don't repeat the same text as the media caption.
+  const textSentSeparately = ["buttons", "reaction"].includes(experimentType ?? "");
+  // Telegram rejects captions longer than 1,024 characters. Send long text as
+  // a normal message after the media instead of losing the entire album.
+  const mediaCaption =
+    post.content && post.content.length <= 1024 && !textSentSeparately
+      ? post.content
+      : undefined;
 
   if (post.media?.length > 0) {
     const validMedia = post.media.filter(
-      (item: any) => item?.url && item?.type,
+      (item): item is { type: "image" | "video"; url: string } =>
+        Boolean(item?.url && (item.type === "image" || item.type === "video")),
     );
 
     // ----------------------------------------
@@ -129,25 +201,25 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
       console.info("[Telegram] Sending media group", { mediaCount: validMedia.length });
 
 
+      const mediaFiles = await Promise.all(
+        validMedia.map((item: any, index: number) => downloadMediaFile(item.url, index)),
+      );
       const media = validMedia.map((item: any, index: number) => ({
         type: item.type === "video" ? "video" : "photo",
-        media: item.url,
-        ...(index === 0
-          ? {
-              caption: post.content,
-            }
-          : {}),
+        media: `attach://file${index}`,
+        ...(index === 0 && mediaCaption ? { caption: mediaCaption } : {}),
       }));
-
-
+      const formData = new FormData();
+      formData.append("chat_id", String(chatId));
+      formData.append("media", JSON.stringify(media));
+      mediaFiles.forEach((file, index) => {
+        formData.append(`file${index}`, file.blob, file.filename);
+      });
 
       try {
         const response = await axios.post(
           `${api}/sendMediaGroup`,
-          {
-            chat_id: chatId,
-            media,
-          },
+          formData,
           {
             timeout: 500000,
           },
@@ -180,25 +252,21 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     // ----------------------------------------
     else if (validMedia.length === 1) {
       const media = validMedia[0];
+      if (!media) throw new Error("Telegram media item is missing");
       console.info("[Telegram] Sending single media", { type: media?.type });
 
 
 
       const mediaEndpoint = media?.type === "video" ? "sendVideo" : "sendPhoto";
-
-      const mediaBody: Record<string, any> = {
-        chat_id: chatId,
-
-        ...(media?.type === "video"
-          ? {
-              video: media?.url,
-              caption: post.content,
-            }
-          : {
-              photo: media?.url,
-              caption: post.content,
-            }),
-      };
+      const mediaFile = await downloadMediaFile(media.url, 0);
+      const mediaBody = new FormData();
+      mediaBody.append("chat_id", String(chatId));
+      mediaBody.append(
+        mediaEndpoint === "sendVideo" ? "video" : "photo",
+        mediaFile.blob,
+        mediaFile.filename,
+      );
+      if (mediaCaption) mediaBody.append("caption", mediaCaption);
 
       const mediaResponse = await axios.post(
         `${api}/${mediaEndpoint}`,
@@ -225,6 +293,7 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
 
   const needsSeparateMessage =
     !hasMedia ||
+    (Boolean(post.content) && !mediaCaption && !specialMessage) ||
     experimentType === "poll" ||
     experimentType === "question" ||
     experimentType === "buttons" ||

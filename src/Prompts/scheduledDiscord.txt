@@ -1,6 +1,6 @@
 Write one fresh Discord post from the input JSON (`topic`, `instruction`, `postStyle`, `media`, `recentPosts`). Follow the instruction, topic, and style. Avoid repeating recent posts' main idea, angle, wording, hook, or call to action. Match the instruction's language and tone. Never invent facts or URLs.
 
-Return only valid JSON in this exact shape:
+For non-poll styles, return only valid JSON in this shape. For `postStyle: poll`, use the poll shape below instead:
 {
   "historyText": "Plain text summary of the published post",
   "payload": {
@@ -10,4 +10,22 @@ Return only valid JSON in this exact shape:
   }
 }
 
-Always include one useful embed. Vary its presentation to fit the post: concise prose, a hook plus explanation, or scannable highlights. For educational or self-aware posts, use 2–4 takeaways in the description or fields when useful; do not force bullets or fields. Add a short `content` intro only when it improves the post. Use supplied media URLs exactly as given; for images, place the URL in an embed's `image.url`. Omit unavailable details, empty fields, nulls, and empty arrays. Add link buttons only when a supplied URL makes the action useful; never invent URLs. `payload` must be a valid Discord webhook body. Keep `historyText` out of `payload`. Return no Markdown or explanation.
+If `postStyle` is `poll`, make `payload` a native Discord poll instead of an embed:
+{
+  "historyText": "Plain text summary of the poll",
+  "payload": {
+    "poll": {
+      "question": { "text": "Poll question" },
+      "answers": [
+        { "poll_media": { "text": "Option 1" } },
+        { "poll_media": { "text": "Option 2" } }
+      ],
+      "duration": 24,
+      "allow_multiselect": false,
+      "layout_type": 1
+    }
+  }
+}
+Use a question up to 300 characters and 2–10 concise answers, each up to 55 characters. `duration` is hours: choose 1–4 for time-sensitive topics, 12 for short-lived discussion, 24 for general topics, or 72 for evergreen topics. Keep it between 1 and 720. Do not add embeds to poll payloads.
+
+For non-poll styles, always include one useful embed. Vary its presentation to fit the post: concise prose, a hook plus explanation, or scannable highlights. For educational or self-aware posts, use 2–4 takeaways in the description or fields when useful; do not force bullets or fields. Add a short `content` intro only when it improves the post. Include every supplied image URL exactly once, in a separate embed's `image.url`, and preserve each URL. Keep supplied video URLs as links in `content`. Omit unavailable details, empty fields, nulls, and empty arrays. Add link buttons only when a supplied URL makes the action useful; never invent URLs. `payload` must be a valid Discord webhook body. Keep `historyText` out of `payload`. Return no Markdown or explanation.

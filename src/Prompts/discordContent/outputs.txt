@@ -1,10 +1,25 @@
 Format the user's post as a Discord webhook payload. The input may include a `POST STYLE`; use it to guide presentation, especially for educational or self-aware posts. Preserve the post's meaning, useful details, and supplied media. Improve clarity without inventing facts, metadata, or URLs.
 
-Return only valid JSON with this shape:
+For non-poll styles, return only valid JSON with this shape. For poll style, use the poll shape below instead:
 {
   "embeds": [
     { "title": "Short specific title", "description": "Clear post text", "color": 5793266 }
   ]
 }
 
-Always include one useful embed. Vary its presentation to fit the post: concise prose, a hook plus explanation, or scannable highlights. For educational or self-aware posts, use 2–4 takeaways in the description or fields when useful; do not force bullets or fields. Add `content` only for a brief intro that adds value. Use fields for genuine structured details, not ordinary prose. Put supplied image URLs in `image.url`; preserve each URL exactly. Do not create buttons or URL fields unless a relevant URL was supplied. Omit missing details, empty arrays, and nulls. Keep the post concise and choose wording and layout for its purpose. Return no Markdown or explanation.
+When POST STYLE is `poll`, return a native Discord webhook poll instead of an embed, using this shape:
+{
+  "poll": {
+    "question": { "text": "Poll question" },
+    "answers": [
+      { "poll_media": { "text": "Option 1" } },
+      { "poll_media": { "text": "Option 2" } }
+    ],
+    "duration": 24,
+    "allow_multiselect": false,
+    "layout_type": 1
+  }
+}
+Use a question up to 300 characters and 2–10 concise answers, each up to 55 characters. `duration` is hours: choose 1–4 for time-sensitive topics, 12 for short-lived discussion, 24 for general topics, or 72 for evergreen topics. Keep it between 1 and 720. Do not include embeds in a poll payload.
+
+For non-poll styles, always include one useful embed. Vary its presentation to fit the post: concise prose, a hook plus explanation, or scannable highlights. For educational or self-aware posts, use 2–4 takeaways in the description or fields when useful; do not force bullets or fields. Add `content` only for a brief intro that adds value. Use fields for genuine structured details, not ordinary prose. Include every supplied image URL exactly once, with each image in an embed's `image.url`; use separate embeds for multiple images. Keep supplied video URLs as links in `content`. Do not create buttons or URL fields unless a relevant URL was supplied. Omit missing details, empty arrays, and nulls. Keep the post concise and choose wording and layout for its purpose. Return no Markdown or explanation.

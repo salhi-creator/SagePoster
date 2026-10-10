@@ -126,6 +126,7 @@ export type TelegramExperiment =
       type: "poll";
       question: string;
       options: string[];
+      durationHours?: number;
       is_anonymous: boolean;
     }
   | {
@@ -170,6 +171,7 @@ export interface TeleBotButton {
 export interface TelegramPoll {
   question: string;
   options: string[];
+  durationHours?: number;
 }
 
 export interface TelegramQuestion {

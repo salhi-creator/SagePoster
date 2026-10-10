@@ -47,12 +47,13 @@ async function handleScheduleDiscord(
     !generated.payload ||
     typeof generated.payload !== "object" ||
     (!generated.payload.content &&
-      !(Array.isArray(generated.payload.embeds) && generated.payload.embeds.length))
+      !(Array.isArray(generated.payload.embeds) && generated.payload.embeds.length) &&
+      !(generated.payload.poll && typeof generated.payload.poll === "object"))
   ) {
     throw new Error("AI could not generate a valid scheduled Discord post");
   }
 
-  await sendDiscordPayload(generated.payload);
+  await sendDiscordPayload(generated.payload, discord.media ?? []);
   console.info("[Schedule:Discord] Post delivered");
 
   try {

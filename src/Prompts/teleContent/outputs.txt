@@ -87,6 +87,7 @@ When `STRUCTURE TYPE: POLL`, return an object containing:
 
 * `question`
 * `options`
+* `durationHours` (integer): choose based on topic urgency: 1–4 for time-sensitive, 12 for short-lived discussion, 24 for general, or 72 for evergreen topics; max 720. Telegram question max 300 characters; each answer must be 1–100 characters.
 
 Use **2–4 options**.
 
@@ -105,7 +106,8 @@ Output:
 ```json
 {
   "question": "Which framework would you learn next?",
-  "options": ["React", "Vue", "Svelte"]
+  "options": ["React", "Vue", "Svelte"],
+  "durationHours": 24
 }
 ```
 

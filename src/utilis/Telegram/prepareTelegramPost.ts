@@ -55,13 +55,28 @@ async function getExperiment(
 
     case "poll": {
       const poll = await AIanswer(content, "tele-poll");
-
-      const data = poll as TelegramPoll;
+      const data = poll as TelegramPoll | null;
+      if (
+        !data ||
+        typeof data.question !== "string" ||
+        !data.question.trim() ||
+        data.question.length > 300 ||
+        !Array.isArray(data.options) ||
+        data.options.length < 2 ||
+        data.options.length > 12 ||
+        data.options.some(
+          (option) =>
+            typeof option !== "string" || !option.trim() || option.length > 100,
+        )
+      ) {
+        throw new Error("AI returned an invalid Telegram poll; expected a question and 2–12 options");
+      }
 
       return {
         type: "poll",
         question: data.question,
         options: data.options,
+        durationHours: data.durationHours,
         is_anonymous: true,
       };
     }
@@ -144,9 +159,15 @@ async function prepareTelegramPost(
   const telegram = aiResult.platforms.telegram;
 
   if (!telegram) return;
-  if (!telegram.enabled || !style) {
+  if (!telegram.enabled) {
     return aiResult;
   }
+  if (!telegram.content?.trim()) {
+    throw new Error(
+      "Telegram post content is empty; the planner marked Telegram enabled but returned no content",
+    );
+  }
+  if (!style) return aiResult;
 
   const experiment = await getExperiment(style, telegram);
 

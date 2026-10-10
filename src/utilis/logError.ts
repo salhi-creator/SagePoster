@@ -8,7 +8,7 @@ export function logError(
   const value = error instanceof Error ? error : new Error(String(error));
   const details = error as {
     code?: unknown;
-    response?: { status?: unknown };
+    response?: { status?: unknown; data?: { description?: unknown } };
   } | null;
   const safeMessage = value.message.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[REDACTED]");
 
@@ -19,6 +19,10 @@ export function logError(
       message: safeMessage,
       code: details?.code,
       httpStatus: details?.response?.status,
+      apiDescription:
+        typeof details?.response?.data?.description === "string"
+          ? details.response.data.description
+          : undefined,
     },
   });
 }

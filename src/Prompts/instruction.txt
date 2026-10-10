@@ -14,6 +14,7 @@ Rules:
 * Vary styles naturally and avoid repeating recent styles when context is available.
 * Use `null` or `[]` when information is unavailable.
 * Preserve all supplied media and their order.
+* For `current-state: "submit"`, every enabled platform MUST have non-empty `content`; never return `null` for content that will be published. Use `null` only for disabled platforms or when negotiating.
 * Return ONLY valid JSON.
 
 SUPPORTED PLATFORMS:

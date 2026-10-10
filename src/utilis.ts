@@ -94,18 +94,50 @@ const albumStore = new Map<
       type: "image" | "video";
     }[];
     caption: string;
+    pendingUploads: number;
     timer?: NodeJS.Timeout;
     waiters: {
-      resolve: (value: string) => void;
+      resolve: (value: MediaCheckResult) => void;
     }[];
   }
 >();
 
-export async function MediaCheck(update: any) {
+type ProcessedMedia = { type: "image" | "video"; url: string };
+type MediaCheckResult = { prompt: string; media: ProcessedMedia[] };
+
+function completeAlbum(groupId: string): void {
+  const album = albumStore.get(groupId);
+  if (!album) return;
+
+  if (album.pendingUploads > 0) {
+    album.timer = setTimeout(() => completeAlbum(groupId), 250);
+    return;
+  }
+
+  album.urls.sort((a, b) => a.messageId - b.messageId);
+  const media: ProcessedMedia[] = album.urls.map(({ type, url }) => ({ type, url }));
+  const mediaInfo = media
+    .map((item) => `MEDIA INFO:\n\ntype: ${item.type}\n\nurl: ${item.url}`)
+    .join("\n\n");
+  const prompt = `NOW USER SENT MEDIA\n\n${mediaInfo}\n\nUSER TEXT CONTENT:\n${album.caption}`;
+
+  console.info("[Media] Telegram album collected", { mediaCount: media.length });
+  albumStore.delete(groupId);
+
+  album.waiters.forEach((waiter, index) => {
+    waiter.resolve(
+      index === album.waiters.length - 1
+        ? { prompt, media }
+        : { prompt: "", media: [] },
+    );
+  });
+}
+
+export async function MediaCheck(update: any): Promise<MediaCheckResult> {
   const message = update.message;
 
   if (!message) {
-    return "";
+    return { prompt: "", media: [] };
   }
 
   /*
@@ -123,22 +155,29 @@ export async function MediaCheck(update: any) {
 
   if (message.media_group_id && mediaFile) {
     const groupId = message.media_group_id;
-    const buffer = await downloadTelegramFile(mediaFile.file_id);
-    const url = await uploadBufferToCloudinary(
-      buffer,
-      mediaType === "image" ? "image" : "video",
-    );
-
     let album = albumStore.get(groupId);
 
     if (!album) {
       album = {
         urls: [],
         caption: "",
+        pendingUploads: 0,
         waiters: [],
       };
 
       albumStore.set(groupId, album);
+    }
+
+    album.pendingUploads += 1;
+    let url: string;
+    try {
+      const buffer = await downloadTelegramFile(mediaFile.file_id);
+      url = await uploadBufferToCloudinary(
+        buffer,
+        mediaType === "image" ? "image" : "video",
+      );
+    } finally {
+      album.pendingUploads -= 1;
     }
 
     /*
@@ -168,65 +207,11 @@ export async function MediaCheck(update: any) {
       clearTimeout(album.timer);
     }
 
-    const result = await new Promise<string>((resolve) => {
+    const result = await new Promise<MediaCheckResult>((resolve) => {
       album!.waiters.push({ resolve });
 
       album!.timer = setTimeout(() => {
-        const currentAlbum = albumStore.get(groupId);
-
-        if (!currentAlbum) {
-          resolve("");
-          return;
-        }
-
-        /*
-         * Restore Telegram's original album order.
-         */
-        currentAlbum.urls.sort((a, b) => a.messageId - b.messageId);
-
-        console.log(
-          `📸 TELEGRAM ALBUM COMPLETE: ${currentAlbum.urls.length} images`,
-        );
-
-        console.info("[Media] Album URLs prepared", { mediaCount: currentAlbum.urls.length });
-
-        /*
-         * Create media information ONLY from the URLs.
-         * Caption is added separately below.
-         */
-        const mediaInfo = currentAlbum.urls
-          .map(
-            (item) => `
-MEDIA INFO:
-
-type: ${item.type}
-
-url: ${item.url}
-`,
-          )
-          .join("\n");
-
-        const finalMessage = `
-NOW USER SENT MEDIA
-
-${mediaInfo}
-
-USER TEXT CONTENT:
-${currentAlbum.caption}
-`;
-
-        albumStore.delete(groupId);
-
-        const waiters = currentAlbum.waiters;
-
-        waiters.forEach((waiter, index) => {
-          if (index === waiters.length - 1) {
-            waiter.resolve(finalMessage);
-          } else {
-            // Only one webhook update should trigger AI generation for an album.
-            waiter.resolve("");
-          }
-        });
+        completeAlbum(groupId);
       }, 1000);
     });
 
@@ -244,18 +229,10 @@ ${currentAlbum.caption}
 
     const url = await uploadBufferToCloudinary(buffer, "image");
 
-    return `
-NOW USER SENT MEDIA
-
-MEDIA INFO:
-
-type: image
-
-url: ${url}
-
-USER TEXT CONTENT:
-${message.caption ?? ""}
-`;
+    return {
+      prompt: `NOW USER SENT MEDIA\n\nMEDIA INFO:\n\ntype: image\n\nurl: ${url}\n\nUSER TEXT CONTENT:\n${message.caption ?? ""}`,
+      media: [{ type: "image", url }],
+    };
   }
 
   /*
@@ -269,18 +246,10 @@ ${message.caption ?? ""}
 
     const url = await uploadBufferToCloudinary(buffer, "video");
 
-    return `
-NOW USER SENT MEDIA
-
-MEDIA INFO:
-
-type: video
-
-url: ${url}
-
-USER TEXT CONTENT:
-${message.caption ?? ""}
-`;
+    return {
+      prompt: `NOW USER SENT MEDIA\n\nMEDIA INFO:\n\ntype: video\n\nurl: ${url}\n\nUSER TEXT CONTENT:\n${message.caption ?? ""}`,
+      media: [{ type: "video", url }],
+    };
   }
 
   /*
@@ -290,13 +259,10 @@ ${message.caption ?? ""}
    */
 
   if (message.text) {
-    return `
-USER TEXT CONTENT:
-${message.text}
-`;
+    return { prompt: `USER TEXT CONTENT:\n${message.text}`, media: [] };
   }
 
-  return "";
+  return { prompt: "", media: [] };
 }
 
 export async  function sendMessageBackToMe(chatId: string, report: string) {
