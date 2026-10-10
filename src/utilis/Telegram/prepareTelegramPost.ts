@@ -69,11 +69,11 @@ async function getExperiment(
     case "question": {
       const result = await AIanswer(content, "tele-question");
 
-      console.log("🧠 TELE QUESTION AI RESULT:", result);
+      console.info("[Telegram] Question experiment generated", { hasResult: Boolean(result) });
 
       const data = result as TelegramQuestion;
 
-      console.log("❓ EXTRACTED QUESTION:", JSON.stringify(data?.question));
+      console.info("[Telegram] Question experiment parsed", { hasQuestion: Boolean(data?.question) });
 
       return {
         type: "question",

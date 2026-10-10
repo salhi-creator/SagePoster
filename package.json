@@ -29,6 +29,7 @@
     "express": "^5.2.1",
     "fs-extra": "^11.4.1",
     "http": "^0.0.1-security",
+    "ioredis": "^6.0.0",
     "multer": "^2.4.0",
     "openai": "^7.25.0",
     "path": "^0.12.7",

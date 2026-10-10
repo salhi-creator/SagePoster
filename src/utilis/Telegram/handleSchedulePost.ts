@@ -7,6 +7,7 @@ import type {
 } from "../../Data-Structure/types.js";
 import { sendToTelegram } from "../../Platform-ReplyHandle/sendToTelegram.js";
 import { getRecentTelegramPosts, savePublishedTelegramPost } from "../../SQL_DB/connectDB.js";
+import { logError } from "../logError.js";
 
 async function handleSchedulePost(
   telegram: TelegramPost,
@@ -20,7 +21,9 @@ async function handleSchedulePost(
     throw new Error("Scheduled Telegram post topic is required");
   }
 
+  console.info("[Schedule:Telegram] Loading recent posts", { topic });
   const recentPosts = await getRecentTelegramPosts(topic);
+  console.info("[Schedule:Telegram] Recent posts loaded", { count: recentPosts.length });
   const input: ScheduledTelegramInput = {
     topic,
     instruction: prompt,
@@ -47,12 +50,16 @@ async function handleSchedulePost(
     media: telegram.media ?? [],
     experiment: generated.experiment,
   };
+  console.info("[Schedule:Telegram] AI generated post", {
+    mediaCount: telegramPost.media?.length ?? 0,
+    experimentType: telegramPost.experiment?.type,
+  });
   await sendToTelegram(telegramPost);
 
   try {
     await savePublishedTelegramPost(topic, generated.content);
   } catch (error) {
-    console.error("Scheduled post sent, but history could not be saved:", error);
+    logError("Scheduled Telegram post sent but history save failed", error, { topic });
   }
 }
 

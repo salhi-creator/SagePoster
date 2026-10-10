@@ -1,57 +1,43 @@
 import axios from "axios";
-import  DiscordData  from "../utilis/Discord/DiscordData.js";
+import DiscordData from "../utilis/Discord/DiscordData.js";
+import { logError } from "../utilis/logError.js";
 
 export async function sendToDiscord(content?: {
   enabled: boolean;
   content: string;
-  media?: {
-    type: "image" | "video" | null;
-    url: string | null;
-  }[];
+  media?: { type: "image" | "video" | null; url: string | null }[];
 }) {
-  if ( !content || !content.enabled ) return;
+  if (!content || !content.enabled) return;
 
-  const webhook = process.env.DISCORD_WEBHOOK_URL;
-
-  if (!webhook) {
+  if (!process.env.DISCORD_WEBHOOK_URL) {
     throw new Error("DISCORD_WEBHOOK_URL is missing");
   }
 
-  console.log("🟡 DISCORD: starting formatter");
-  console.log("discord params", content);
+  console.info("[Discord] Preparing post", {
+    mediaCount: content.media?.length ?? 0,
+  });
 
-  const Data = await DiscordData({
+  const payload = await DiscordData({
     message: content.content,
     media: content.media ?? [],
   });
 
-  console.log("discord Data", Data);
-
-  return sendDiscordPayload(Data);
+  if (!payload) throw new Error("Discord formatter returned no payload");
+  return sendDiscordPayload(payload);
 }
 
 export async function sendDiscordPayload(payload: Record<string, unknown>) {
   const webhook = process.env.DISCORD_WEBHOOK_URL;
-  if (!webhook) {
-    throw new Error("DISCORD_WEBHOOK_URL is missing");
-  }
+  if (!webhook) throw new Error("DISCORD_WEBHOOK_URL is missing");
 
   try {
     const response = await axios.post(webhook, payload);
-
-    console.log("✅ Discord post sent:", response.status);
-    console.log("🟢 DISCORD: webhook finished", response.status);
+    console.info("[Discord] Webhook accepted post", { status: response.status });
     return response.data;
-
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      console.error(
-        "❌ Discord webhook error:",
-        error.response?.status,
-        error.response?.data,
-      );
-    }
-
+    logError("Discord webhook failed", error, {
+      httpStatus: axios.isAxiosError(error) ? error.response?.status : undefined,
+    });
     throw error;
   }
 }

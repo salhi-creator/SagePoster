@@ -17,7 +17,5 @@ export async function groq(message: string, apiKey: string) {
     input: message,
   });
 
-  console.log(response.output_text);
-
   return response.output_text;
 }

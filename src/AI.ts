@@ -9,6 +9,7 @@ import path from "path";
 import type { AIOption as TelegramOptions, PostForm } from "./Data-Structure/types.js";
 import { telegramBackMessages } from "./utilis/Telegram/telegramBackMessages.js";
 import  discordBackMessages  from "./utilis/Discord/discordBackMessages.js";
+import { logError } from "./utilis/logError.js";
 
 type AIPlatform = "TELEGRAM" | "DISCORD" | "REDDIT" | "LINKEDIN";
 const AI_PLATFORMS: AIPlatform[] = ["TELEGRAM", "DISCORD", "REDDIT", "LINKEDIN"];
@@ -103,17 +104,14 @@ ${message}
   } else if (option && option.startsWith("tele")) {
     console.log("the option is ", option);
     msg = await telegramBackMessages(message, option);
-    console.log("message is tele : ", msg);
   } else if (option && option.startsWith("discord")) {
     console.log("discord reqesut AI")
     msg = await discordBackMessages(message);
-        console.log("discord msg",msg)
 
   } else {
     /*
      * NORMAL POST PLANNER
      */
-    console.log("here the general : ", msg);
     const instructionPath = path.join(__dirname, "Prompts", "instruction.txt");
 
     const instruction = await FileReader(instructionPath);
@@ -128,12 +126,9 @@ ${message}
       `;
   }
 
-  console.log("🤖 AI OPTION:", option);
-  console.log("📐 AI RETURN TYPE:", returnDataType);
-  console.log("📝 AI PROMPT:", msg);
-
   const providerKeys = getProviderKeys(option, message);
-  console.log("AI platform route:", providerKeys.platform ?? "shared planner keys");
+  const route = providerKeys.platform ?? "shared planner keys";
+  console.info("[AI] Request started", { option: option ?? "planner", route });
 
   // Gemini
   try {
@@ -148,13 +143,13 @@ ${message}
     }
 
     const parsed = safeExtractJSON(res, returnDataType);
-    console.log("WHAT HAVE YOU RETURNED ", parsed);
-
     if (parsed) {
+      console.info("[AI] Gemini request succeeded", { route });
       return parsed;
     }
+    console.warn("[AI] Gemini returned unparseable output", { route });
   } catch (err) {
-    console.log("Gemini failed:", err);
+    logError("Gemini request failed", err, { route });
   }
 
   // Groq
@@ -170,14 +165,15 @@ ${message}
     }
 
     const parsed = safeExtractJSON(res, returnDataType);
-    console.log("WHAT HAVE YOU RETURNED ", parsed);
-
     if (parsed) {
+      console.info("[AI] Groq request succeeded", { route });
       return parsed;
     }
+    console.warn("[AI] Groq returned unparseable output", { route });
   } catch (err) {
-    console.log("Groq failed:", err);
+    logError("Groq request failed", err, { route });
   }
 
+  console.error("[AI] All configured providers failed", { route, option });
   return null;
 }

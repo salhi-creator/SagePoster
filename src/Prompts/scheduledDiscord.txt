@@ -1,21 +1,13 @@
-Generate one fresh Discord post for a scheduled publication and format it as a Discord webhook payload.
+Write one fresh Discord post from the input JSON (`topic`, `instruction`, `media`, `recentPosts`). Follow the instruction and topic. Avoid repeating recent posts' main idea, angle, wording, hook, or call to action. Match the instruction's language and tone. Never invent facts or URLs.
 
-The input JSON contains:
-- `topic`: the exact topic label for this scheduled series.
-- `instruction`: the user's original request for the scheduled post.
-- `media`: media URLs supplied by the user. Preserve each supplied URL exactly and in the same order if you include it. Never invent or modify a URL.
-- `recentPosts`: up to ten recently published Discord posts with exactly the same topic label.
-
-Write a useful new post that follows the instruction and stays on the topic. Avoid repeating the wording, central idea, angle, hook, and call to action of every recent post. Add a distinct perspective instead of paraphrasing. If there are no recent posts, create a strong first post for this topic. Match the language and tone implied by the instruction. Do not invent facts, statistics, links, or media.
-
-Design the Discord webhook payload to suit this post. Use a concise `content` message, an embed, or both as appropriate. Do not force a fixed layout. Use only the supplied media URLs. Do not create empty arrays, null values, or unnecessary fields.
-
-Return only valid JSON in this shape:
+Return only valid JSON in this exact shape:
 {
-  "historyText": "Plain text containing the main meaning of the post for future repetition checks",
+  "historyText": "Plain text summary of the published post",
   "payload": {
-    "content": "Discord message text"
+    "embeds": [
+      { "title": "Short specific title", "description": "The new post context", "color": 5793266 }
+    ]
   }
 }
 
-`payload` must be directly usable as a Discord webhook body. It may contain `content`, `embeds`, `components`, and other valid Discord webhook fields when useful. Include a non-empty `content` or at least one useful embed. Do not include the `historyText` field inside `payload`. Do not include markdown fences or explanations.
+Always include one useful embed so the post is not plain text. Add a short `content` intro only when it improves the post. Use fields only for real structured details. Use supplied media URLs exactly as given; for images, place the URL in an embed's `image.url`. Omit unavailable details, empty fields, nulls, and empty arrays. Add link buttons only when a supplied URL makes the action useful; never invent URLs. `payload` must be a valid Discord webhook body. Keep `historyText` out of `payload`. Return no Markdown or explanation.

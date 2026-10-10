@@ -1,10 +1,11 @@
 import axios from "axios";
 import type { TelegramPost,PostJobData } from "../Data-Structure/types.js";
+import { logError } from "../utilis/logError.js";
 export async function sendToTelegram(post: TelegramPost ): Promise<void> {
-  console.log("telePost:", post);
 
- 
- 
+
+
+
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.SAGEHUB_CHAT_ID;
 
@@ -16,10 +17,10 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     throw new Error("TELEGRAM_CHANNEL_ID is missing");
   }
 
-  console.log("🤖 Telegram token loaded:", `${token.slice(0, 8)}...`);
 
-  console.log("📢 Telegram chat ID:", chatId);
-  console.log("🧪 Experiment:", post.experiment);
+
+
+
 
   const api = `https://api.telegram.org/bot${token}`;
 
@@ -36,6 +37,10 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
   let result: any;
 
   const experimentType = post.experiment?.type;
+  console.info("[Telegram] Delivery started", {
+    experimentType: experimentType ?? "none",
+    mediaCount: post.media?.length ?? 0,
+  });
 
   // ==========================================
   // PREPARE BODY DEPENDING ON EXPERIMENT
@@ -121,7 +126,8 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     // ----------------------------------------
 
     if (validMedia.length > 1) {
-      console.log("📸 Preparing media group:", validMedia);
+      console.info("[Telegram] Sending media group", { mediaCount: validMedia.length });
+
 
       const media = validMedia.map((item: any, index: number) => ({
         type: item.type === "video" ? "video" : "photo",
@@ -133,7 +139,7 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
           : {}),
       }));
 
-      console.log("📦 Sending media group:", JSON.stringify(media, null, 2));
+
 
       try {
         const response = await axios.post(
@@ -147,10 +153,9 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
           },
         );
 
-        console.log(
-          "📨 Media group response:",
-          JSON.stringify(response.data, null, 2),
-        );
+        console.info("[Telegram] Media group accepted", {
+          count: Array.isArray(response.data.result) ? response.data.result.length : 0,
+        });
 
         if (!response.data.ok) {
           throw new Error(
@@ -160,13 +165,12 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
 
         mediaResults.push(...response.data.result);
 
-        console.log("✅ Media group delivered");
-      } catch (error: any) {
-        console.error(
-          "❌ sendMediaGroup FAILED:",
-          error.response?.data ?? error.message,
-        );
 
+      } catch (error: any) {
+        logError("Telegram media group failed", error, {
+          httpStatus: error.response?.status,
+          mediaCount: media.length,
+        });
         throw error;
       }
     }
@@ -176,8 +180,9 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     // ----------------------------------------
     else if (validMedia.length === 1) {
       const media = validMedia[0];
+      console.info("[Telegram] Sending single media", { type: media?.type });
 
-      console.log("📸 Sending single media:", media);
+
 
       const mediaEndpoint = media?.type === "video" ? "sendVideo" : "sendPhoto";
 
@@ -208,7 +213,7 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
 
       mediaResults.push(mediaResult);
 
-      console.log("✅ Single media delivered");
+
     }
   }
 
@@ -226,13 +231,14 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     experimentType === "reaction";
 
   if (needsSeparateMessage) {
-    console.log("📤 Telegram main request:", JSON.stringify(body, null, 2));
+    console.info("[Telegram] Sending main message", { experimentType: experimentType ?? "none" });
+
 
     const response = await axios.post(`${api}/${endpoint}`, body);
 
     result = response.data;
 
-    console.log("📨 Telegram main response:", JSON.stringify(result, null, 2));
+
 
     if (!result.ok) {
       throw new Error(
@@ -251,19 +257,24 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
    * Now send the experiment/message ONCE.
    */
 
-  console.log("📤 Telegram main request:", JSON.stringify(body, null, 2));
+
 
   // const response = await axios.post(`${api}/${endpoint}`, body);
 
   // result = response.data;
 
-  console.log("📨 Telegram main response:", JSON.stringify(result, null, 2));
+
 
   if (result && !result.ok) {
     throw new Error(
       `Telegram ${experimentType ?? "message"} error: ${result.description}`,
     );
   }
+
+  console.info("[Telegram] Main post delivered", {
+    messageId: result?.result?.message_id,
+    mediaCount: mediaResults.length,
+  });
 
   // ==========================================
   // REACTION
@@ -291,11 +302,10 @@ export async function sendToTelegram(post: TelegramPost ): Promise<void> {
     });
 
     const reactionResult = reactionResponse.data;
-
-    console.log(
-      "❤️ Reaction response:",
-      JSON.stringify(reactionResult, null, 2),
-    );
+    console.info("[Telegram] Reaction result", {
+      messageId,
+      ok: reactionResult.ok,
+    });
 
     if (!reactionResult.ok) {
       console.error("❌ Reaction failed:", reactionResult.description);

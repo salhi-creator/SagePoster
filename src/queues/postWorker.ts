@@ -6,6 +6,7 @@ import { sendToTelegram } from "../Platform-ReplyHandle/sendToTelegram.js";
 // import { sendToLinkedIn } from "../Platform-ReplyHandle/sendToLinkedIn.js";
 import handleSchedulePost from "../utilis/Telegram/handleSchedulePost.js";
 import handleScheduleDiscord from "../utilis/Discord/handleScheduleDiscord.js";
+import { logError } from "../utilis/logError.js";
 import type {
   Deadline,
   Platform,
@@ -193,7 +194,7 @@ async function handlePostJob(job: Job<PostJobData>) {
 
       console.log(`[BullMQ] Post ${postId} successfully sent to Telegram`);
     } catch (error) {
-      console.error(`[BullMQ] Telegram failed for post ${postId}:`, error);
+      logError("BullMQ Telegram delivery failed", error, { postId });
 
       throw error;
     }
@@ -217,7 +218,7 @@ async function handlePostJob(job: Job<PostJobData>) {
 
       console.log(`[BullMQ] Post ${postId} successfully sent to Discord`);
     } catch (error) {
-      console.error(`[BullMQ] Discord failed for post ${postId}:`, error);
+      logError("BullMQ Discord delivery failed", error, { postId });
 
       throw error;
     }
@@ -329,15 +330,35 @@ export const postWorker = new Worker<PostJobData>("post", handlePostJob, {
 */
 
 postWorker.on("completed", (job, result) => {
-  console.log(`[BullMQ] Job ${job.id} completed`, result);
+  console.info("[BullMQ] Job completed", {
+    jobId: job.id,
+    postId: job.data.postId,
+    platforms: job.data.platforms,
+  });
 });
 
 postWorker.on("failed", (job, error) => {
-  console.error(`[BullMQ] Job ${job?.id} failed:`, error);
+  logError("BullMQ job failed", error, {
+    jobId: job?.id,
+    postId: job?.data.postId,
+    attemptsMade: job?.attemptsMade,
+    platforms: job?.data.platforms.join(","),
+  });
 });
 
 postWorker.on("error", (error) => {
-  console.error(`[BullMQ] Worker error:`, error);
+  logError("BullMQ worker Redis/processing error", error, {
+    host: connection.host,
+    port: connection.port,
+  });
+});
+
+postWorker.on("ready", () => {
+  console.info("[BullMQ] Worker connected to Redis and ready");
+});
+
+postWorker.on("stalled", (jobId) => {
+  console.error("[BullMQ] Job stalled", { jobId });
 });
 
 console.log("[BullMQ] Post worker started");

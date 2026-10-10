@@ -6,6 +6,7 @@ import {
   uploadBufferToCloudinary,
 } from "./utilis/cloudinary.js";
 import axios from "axios";
+import { logError } from "./utilis/logError.js";
 dotenv.config();
 
 
@@ -31,7 +32,7 @@ let urlSend = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sen
     let data = JSON.parse(jsonStr);
     return data || "something went wrong";
   } catch (err) {
-    console.log("JSON parse failed:", err);
+    logError("AI JSON parsing failed", err, { expected: type });
     return null;
   }
 }*/
@@ -72,8 +73,7 @@ export function safeExtractJSON(
 
     return JSON.parse(fixed);
   } catch (err) {
-    console.log("JSON parse failed:", err);
-    console.log("Raw text:", text);
+    logError("AI JSON parsing failed", err, { expected: type });
 
     return null;
   }
@@ -188,10 +188,7 @@ export async function MediaCheck(update: any) {
           `📸 TELEGRAM ALBUM COMPLETE: ${currentAlbum.urls.length} images`,
         );
 
-        console.log(
-          "📸 ALBUM URLS:",
-          currentAlbum.urls.map((item) => item.url),
-        );
+        console.info("[Media] Album URLs prepared", { mediaCount: currentAlbum.urls.length });
 
         /*
          * Create media information ONLY from the URLs.
@@ -311,7 +308,7 @@ export async  function sendMessageBackToMe(chatId: string, report: string) {
 
     return;
   } catch (err) {
-    console.error("WEBHOOK ERROR | SEND MESSAGE BACK ERROR:", err);
+    logError("Telegram status reply failed", err);
     return;
   }
 }

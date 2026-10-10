@@ -9,6 +9,7 @@ import {
   getRecentDiscordPosts,
   savePublishedDiscordPost,
 } from "../../SQL_DB/connectDB.js";
+import { logError } from "../logError.js";
 
 async function handleScheduleDiscord(
   discord: DiscordPost,
@@ -22,11 +23,14 @@ async function handleScheduleDiscord(
     throw new Error("Scheduled Discord post topic is required");
   }
 
+  console.info("[Schedule:Discord] Loading recent posts", { topic });
+  const recentPosts = await getRecentDiscordPosts(topic);
+  console.info("[Schedule:Discord] Recent posts loaded", { count: recentPosts.length });
   const input: ScheduledDiscordInput = {
     topic,
     instruction,
     media: discord.media ?? [],
-    recentPosts: await getRecentDiscordPosts(topic),
+    recentPosts,
   };
   const generated = (await AIanswer(
     JSON.stringify(input),
@@ -46,11 +50,12 @@ async function handleScheduleDiscord(
   }
 
   await sendDiscordPayload(generated.payload);
+  console.info("[Schedule:Discord] Post delivered");
 
   try {
     await savePublishedDiscordPost(topic, generated.historyText);
   } catch (error) {
-    console.error("Scheduled Discord post sent, but history could not be saved:", error);
+    logError("Scheduled Discord post sent but history save failed", error, { topic });
   }
 }
 
