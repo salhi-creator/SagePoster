@@ -3,6 +3,7 @@ import { AIanswer } from "../../AI.js";
 import type {
   ScheduledTelegramInput,
   ScheduledTelegramOutput,
+  PostStyle,
   TelegramPost,
 } from "../../Data-Structure/types.js";
 import { sendToTelegram } from "../../Platform-ReplyHandle/sendToTelegram.js";
@@ -12,6 +13,7 @@ import { logError } from "../logError.js";
 async function handleSchedulePost(
   telegram: TelegramPost,
   topic: string | null,
+  postStyle: PostStyle | null,
 ): Promise<void> {
   const prompt = telegram.content?.trim();
   if (!prompt) {
@@ -27,6 +29,7 @@ async function handleSchedulePost(
   const input: ScheduledTelegramInput = {
     topic,
     instruction: prompt,
+    postStyle,
     media: telegram.media ?? [],
     recentPosts,
   };

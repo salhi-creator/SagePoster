@@ -139,6 +139,7 @@ export type TelegramExperiment =
 export interface ScheduledTelegramInput {
   topic: string;
   instruction: string;
+  postStyle: PostStyle | null;
   media: TelegramPost["media"];
   recentPosts: string[];
 }
@@ -151,6 +152,7 @@ export type ScheduledTelegramOutput = {
 export interface ScheduledDiscordInput {
   topic: string;
   instruction: string;
+  postStyle: PostStyle | null;
   media: DiscordPost["media"];
   recentPosts: string[];
 }
@@ -211,4 +213,6 @@ export interface PostJobData {
   platforms: Platform[];
 
   form: PostForm;
+  scheduledRunAt?: number;
+  nextRunAt?: number;
 }

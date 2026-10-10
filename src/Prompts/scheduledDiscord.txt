@@ -1,4 +1,4 @@
-Write one fresh Discord post from the input JSON (`topic`, `instruction`, `media`, `recentPosts`). Follow the instruction and topic. Avoid repeating recent posts' main idea, angle, wording, hook, or call to action. Match the instruction's language and tone. Never invent facts or URLs.
+Write one fresh Discord post from the input JSON (`topic`, `instruction`, `postStyle`, `media`, `recentPosts`). Follow the instruction, topic, and style. Avoid repeating recent posts' main idea, angle, wording, hook, or call to action. Match the instruction's language and tone. Never invent facts or URLs.
 
 Return only valid JSON in this exact shape:
 {
@@ -10,4 +10,4 @@ Return only valid JSON in this exact shape:
   }
 }
 
-Always include one useful embed so the post is not plain text. Add a short `content` intro only when it improves the post. Use fields only for real structured details. Use supplied media URLs exactly as given; for images, place the URL in an embed's `image.url`. Omit unavailable details, empty fields, nulls, and empty arrays. Add link buttons only when a supplied URL makes the action useful; never invent URLs. `payload` must be a valid Discord webhook body. Keep `historyText` out of `payload`. Return no Markdown or explanation.
+Always include one useful embed. Vary its presentation to fit the post: concise prose, a hook plus explanation, or scannable highlights. For educational or self-aware posts, use 2–4 takeaways in the description or fields when useful; do not force bullets or fields. Add a short `content` intro only when it improves the post. Use supplied media URLs exactly as given; for images, place the URL in an embed's `image.url`. Omit unavailable details, empty fields, nulls, and empty arrays. Add link buttons only when a supplied URL makes the action useful; never invent URLs. `payload` must be a valid Discord webhook body. Keep `historyText` out of `payload`. Return no Markdown or explanation.

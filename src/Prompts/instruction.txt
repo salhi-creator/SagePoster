@@ -9,6 +9,7 @@ Rules:
 * Never publish anything yourself.
 * Only enable platforms explicitly requested by the user.
 * Keep content human, casual, varied, and platform-appropriate.
+* Vary line breaks and presentation to fit the idea; do not reuse one post shape across platforms.
 * Do not make every post educational, motivational, polished, or long.
 * Vary styles naturally and avoid repeating recent styles when context is available.
 * Use `null` or `[]` when information is unavailable.
@@ -113,9 +114,9 @@ MEDIA:
 
 PLATFORM RULES:
 
-* Telegram → concise and conversational.
+* Telegram → concise and conversational. Use a short hook, a few short paragraphs, a question, or (when useful) 2–4 `Key points` / `Highlights` for educational or self-aware posts. Use bullets only when there are distinct takeaways; otherwise write natural prose.
 * Reddit → title + content; never invent a subreddit.
-* Discord → natural and community-oriented.
+* Discord → natural and community-oriented. Vary between a short message, a hook plus explanation, scannable points, or a useful question/action. For educational or self-aware posts, use 2–4 clear highlights when they genuinely help; do not force lists.
 * LinkedIn → professional but human; do not make every post a corporate article.
 
 STYLE:

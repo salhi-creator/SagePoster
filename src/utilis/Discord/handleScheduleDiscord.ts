@@ -10,10 +10,12 @@ import {
   savePublishedDiscordPost,
 } from "../../SQL_DB/connectDB.js";
 import { logError } from "../logError.js";
+import type { PostStyle } from "../../Data-Structure/types.js";
 
 async function handleScheduleDiscord(
   discord: DiscordPost,
   topic: string | null,
+  postStyle: PostStyle | null,
 ): Promise<void> {
   const instruction = discord.content.trim();
   if (!instruction) {
@@ -29,6 +31,7 @@ async function handleScheduleDiscord(
   const input: ScheduledDiscordInput = {
     topic,
     instruction,
+    postStyle,
     media: discord.media ?? [],
     recentPosts,
   };

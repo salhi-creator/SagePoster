@@ -1,11 +1,14 @@
 import { AIanswer } from "../../AI.js";
 import { logError } from "../logError.js";
+import type { PostStyle } from "../../Data-Structure/types.js";
 
  async function DiscordData({
   message,
   media,
+  postStyle,
 }: {
   message: string;
+  postStyle: PostStyle | null;
   media: {
     type: "image" | "video" | null;
     url: string | null;
@@ -15,6 +18,9 @@ import { logError } from "../logError.js";
     const input = `
 USER MESSAGE:
 ${message}
+
+POST STYLE:
+${postStyle ?? "infer from the message"}
 
 MEDIA:
 ${JSON.stringify(media, null, 2)}

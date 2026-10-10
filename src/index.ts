@@ -119,7 +119,7 @@ app.post("/webhook", async (req, res) => {
       }*/
 
       if (result.platforms.discord?.enabled) {
-        await sendToDiscord(result.platforms?.discord);
+        await sendToDiscord(result.platforms?.discord, result["post-style"]);
         console.info("[Webhook] Discord publish succeeded", { requestId });
         if (result.topic && result.platforms.discord.content) {
           try {

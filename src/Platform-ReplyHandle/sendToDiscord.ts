@@ -1,12 +1,16 @@
 import axios from "axios";
 import DiscordData from "../utilis/Discord/DiscordData.js";
 import { logError } from "../utilis/logError.js";
+import type { PostStyle } from "../Data-Structure/types.js";
 
-export async function sendToDiscord(content?: {
-  enabled: boolean;
-  content: string;
-  media?: { type: "image" | "video" | null; url: string | null }[];
-}) {
+export async function sendToDiscord(
+  content?: {
+    enabled: boolean;
+    content: string;
+    media?: { type: "image" | "video" | null; url: string | null }[];
+  },
+  postStyle: PostStyle | null = null,
+) {
   if (!content || !content.enabled) return;
 
   if (!process.env.DISCORD_WEBHOOK_URL) {
@@ -20,6 +24,7 @@ export async function sendToDiscord(content?: {
   const payload = await DiscordData({
     message: content.content,
     media: content.media ?? [],
+    postStyle,
   });
 
   if (!payload) throw new Error("Discord formatter returned no payload");
