@@ -14,6 +14,7 @@ async function handleSchedulePost(
   telegram: TelegramPost,
   topic: string | null,
   postStyle: PostStyle | null,
+  postId?: string,
 ): Promise<void> {
   const prompt = telegram.content?.trim();
   if (!prompt) {
@@ -60,7 +61,10 @@ async function handleSchedulePost(
   await sendToTelegram(telegramPost);
 
   try {
-    await savePublishedTelegramPost(topic, generated.content);
+    await savePublishedTelegramPost(topic, generated.content, {
+      deliveryType: "scheduled",
+      ...(postId ? { postId } : {}),
+    });
   } catch (error) {
     logError("Scheduled Telegram post sent but history save failed", error, { topic });
   }

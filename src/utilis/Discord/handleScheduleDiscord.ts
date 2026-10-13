@@ -16,6 +16,7 @@ async function handleScheduleDiscord(
   discord: DiscordPost,
   topic: string | null,
   postStyle: PostStyle | null,
+  postId?: string,
 ): Promise<void> {
   const instruction = discord.content.trim();
   if (!instruction) {
@@ -57,7 +58,10 @@ async function handleScheduleDiscord(
   console.info("[Schedule:Discord] Post delivered");
 
   try {
-    await savePublishedDiscordPost(topic, generated.historyText);
+    await savePublishedDiscordPost(topic, generated.historyText, {
+      deliveryType: "scheduled",
+      ...(postId ? { postId } : {}),
+    });
   } catch (error) {
     logError("Scheduled Discord post sent but history save failed", error, { topic });
   }

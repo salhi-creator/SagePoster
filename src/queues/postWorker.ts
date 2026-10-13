@@ -2,11 +2,12 @@ import { Worker, Job } from "bullmq";
 import { postQueue } from "./postQueue.js";
 
 import { sendToTelegram } from "../Platform-ReplyHandle/sendToTelegram.js";
-// import { sendToReddit } from "../Platform-ReplyHandle/sendToReddit.js";
+import { sendToReddit } from "../Platform-ReplyHandle/sendToReddit.js";
 // import { sendToLinkedIn } from "../Platform-ReplyHandle/sendToLinkedIn.js";
 import handleSchedulePost from "../utilis/Telegram/handleSchedulePost.js";
 import handleScheduleDiscord from "../utilis/Discord/handleScheduleDiscord.js";
 import { logError } from "../utilis/logError.js";
+import { savePublishedRedditPost } from "../SQL_DB/connectDB.js";
 import type {
   Deadline,
   Platform,
@@ -260,6 +261,7 @@ async function handlePostJob(job: Job<PostJobData>) {
         form.platforms.telegram,
         form.topic,
         form["post-style"],
+        postId,
       );
 
       console.log(`[BullMQ] Post ${postId} successfully sent to Telegram`);
@@ -288,6 +290,7 @@ async function handlePostJob(job: Job<PostJobData>) {
         form.platforms.discord,
         form.topic,
         form["post-style"],
+        postId,
       );
 
       console.log(`[BullMQ] Post ${postId} successfully sent to Discord`);
@@ -298,41 +301,40 @@ async function handlePostJob(job: Job<PostJobData>) {
     }
   }
 
-  /*
-   * REDDIT
-   *
-   * Enable when Reddit integration is ready.
-   */
-
-  /*
   if (platforms.includes("reddit")) {
-    if (!data.reddit) {
+    const redditPost = form.platforms.reddit;
+    if (!redditPost?.enabled) {
       throw new Error(
-        `Post ${postId}: Reddit is enabled but no Reddit data was provided`
+        `Post ${postId}: Reddit is enabled but no Reddit data was provided`,
       );
     }
-
-    console.log(
-      `[BullMQ] Posting ${postId} to Reddit...`
-    );
-
+    if (!form.topic?.trim()) {
+      throw new Error(`Post ${postId}: a topic is required to track Reddit publishing`);
+    }
+    console.log(`[BullMQ] Posting ${postId} to Reddit...`);
     try {
-      results.reddit =
-        await sendToReddit(data.reddit);
-
-      console.log(
-        `[BullMQ] Post ${postId} successfully sent to Reddit`
-      );
+      const published = await sendToReddit(redditPost);
+      results.reddit = published;
+      console.log(`[BullMQ] Post ${postId} successfully sent to Reddit`, {
+        redditPostId: published.postId,
+        url: published.url,
+      });
+      if (form.topic) {
+        try {
+          await savePublishedRedditPost(
+            form.topic,
+            { ...redditPost, redditPostId: published.postId, url: published.url },
+            { deliveryType: "scheduled", postId },
+          );
+        } catch (error) {
+          logError("Reddit history save failed", error, { postId });
+        }
+      }
     } catch (error) {
-      console.error(
-        `[BullMQ] Reddit failed for post ${postId}:`,
-        error
-      );
-
+      logError("BullMQ Reddit delivery failed", error, { postId });
       throw error;
     }
   }
-  */
 
   /*
    * LINKEDIN

@@ -265,7 +265,8 @@ export async function MediaCheck(update: any): Promise<MediaCheckResult> {
   return { prompt: "", media: [] };
 }
 
-export async  function sendMessageBackToMe(chatId: string, report: string) {
+export async  function sendMessageBackToMe(chatId: string, report: string,manage = true) {
+  urlSend =  manage ? `https://api.telegram.org/bot${process.env.PICTURE_UPLOAD_TELEGRAM_BOT_TOKEN}/sendMessage` : `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`;
   try {
     const call = await axios.post(urlSend, {
       chat_id: chatId,

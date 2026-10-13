@@ -53,7 +53,7 @@ export type DiscordPost = {
 };
 
 export type PostForm = {
-  "current-state": "still-negotiate" | "submit" | "schedule-post";
+  "current-state": "still-negotiate" | "submit" | "schedule-post" | "managing";
 
   intent: "create_post";
 
@@ -67,7 +67,7 @@ export type PostForm = {
     telegram?: TelegramPost;
 
     reddit?: {
-      enabled: false;
+      enabled: boolean;
       subreddit: string;
       title: string;
       content: string;
@@ -80,7 +80,7 @@ export type PostForm = {
     discord?: DiscordPost;
 
     linkedin?: {
-      enabled: false;
+      enabled: boolean;
       content: string;
       media: {
         type: "image" | "video" | null;
@@ -95,6 +95,7 @@ export type PostForm = {
     tone: "casual" | "sarcastic" | "spontaneous" | "angry" | "happy";
 
     needs_review: boolean;
+    images: string[];
   };
 
   "dead-line": Deadline;
@@ -179,6 +180,7 @@ export interface TelegramQuestion {
 }
 
 export type AIOption =
+  | "manage-posts"
   | "sheduled-telegram"
   | "scheduled-discord"
   | "tele-button"
@@ -218,3 +220,38 @@ export interface PostJobData {
   scheduledRunAt?: number;
   nextRunAt?: number;
 }
+
+export type ManagedPost = {
+  postId: string;
+  kind: "published" | "schedule";
+  status: "published" | "scheduled" | "running" | "failed";
+  topic: string;
+  platforms: Platform[];
+  publishedAt?: string;
+  scheduledAt?: string;
+  repeat?: Deadline["repeat"];
+  deliveryType?: "one-time" | "scheduled";
+  contentPreview: string;
+  platform?: Platform;
+  content?: string;
+  externalPostId?: string;
+  url?: string;
+  subreddit?: string;
+  title?: string;
+  form?: PostForm;
+};
+
+export type ManagePostsResult = {
+  action: "list" | "delete" | "reschedule" | "clarify";
+  topicKeys: string[];
+  platforms: Platform[] | "all";
+  reddit_post?: {
+    post_behaviour: "delete" | "keep";
+  };
+  message: string;
+  schedule?: {
+    startAt: string | null;
+    endAt: string | null;
+    repeat: Deadline["repeat"];
+  };
+};

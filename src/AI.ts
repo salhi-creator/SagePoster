@@ -10,12 +10,18 @@ import type { AIOption as TelegramOptions, PostForm } from "./Data-Structure/typ
 import { telegramBackMessages } from "./utilis/Telegram/telegramBackMessages.js";
 import  discordBackMessages  from "./utilis/Discord/discordBackMessages.js";
 import { logError } from "./utilis/logError.js";
+import type { CloudinaryPostImage } from "./utilis/cloudinary.js";
 
 type AIPlatform = "TELEGRAM" | "DISCORD" | "REDDIT" | "LINKEDIN";
+type PlannerImageContext = {
+  desiredCount: number;
+  candidates: CloudinaryPostImage[];
+};
 const AI_PLATFORMS: AIPlatform[] = ["TELEGRAM", "DISCORD", "REDDIT", "LINKEDIN"];
 let nextUnscopedPlatform = 0;
 
 function platformForOption(option?: TelegramOptions): AIPlatform | undefined {
+  if (option === "manage-posts") return "LINKEDIN";
   if (option === "sheduled-telegram" || option?.startsWith("tele")) {
     return "TELEGRAM";
   }
@@ -76,12 +82,23 @@ function getProviderKeys(option: TelegramOptions | undefined, message: string) {
 export async function AIanswer(
   message: string,
   option?: TelegramOptions,
+  plannerImageContext?: PlannerImageContext,
 ): Promise<PostForm | any | object | null> {
   let msg = "";
   const returnDataType =
     option === "tele-button" || option === "tele-reaction" ? "array" : "object";
 
-  if (option === "sheduled-telegram") {
+  if (option === "manage-posts") {
+    const promptPath = path.join(__dirname, "Prompts", "managePosts.txt");
+    const instruction = await FileReader(promptPath);
+    msg = `
+POST MANAGEMENT INSTRUCTIONS:
+${instruction}
+
+MANAGEMENT INPUT (JSON):
+${message}
+`;
+  } else if (option === "sheduled-telegram") {
     const promptPath = path.join(__dirname, "Prompts", "scheduledTelegram.txt");
     const instruction = await FileReader(promptPath);
     msg = `
@@ -120,6 +137,10 @@ ${message}
       SYSTEM INSTRUCTIONS:
 
       ${instruction}
+
+      ${plannerImageContext?.candidates.length
+        ? `AVAILABLE CLOUDINARY IMAGES (choose only suitable images; maximum ${plannerImageContext.desiredCount}):\n${JSON.stringify(plannerImageContext.candidates)}`
+        : "AVAILABLE CLOUDINARY IMAGES: none"}
 
       USER SAYS:
       ${message}
