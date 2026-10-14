@@ -189,6 +189,7 @@ export type AIOption =
   | "tele-question"
   | "discord"
   | "reddit"
+  | "reddit-crosspost-review"
   | "linkedin";
 
 export const telegramReactions = [
@@ -254,4 +255,33 @@ export type ManagePostsResult = {
     endAt: string | null;
     repeat: Deadline["repeat"];
   };
+};
+
+export type RedditCrosspostCheck = {
+  canCrosspost: boolean;
+  sourcePost: {
+    id: string;
+    subreddit: string;
+    title: string;
+    body: string | null;
+    url: string;
+    permalink: string;
+  };
+  targetSubreddit: string;
+  rules: { name: string; description: string; appliesTo: string }[];
+};
+
+export type RedditCrosspostRequest = {
+  sourcePostId: string;
+  targetSubreddit: string;
+  title: string | null;
+};
+
+export type ScheduledRedditPostCandidate = {
+  sourcePostId: string;
+  sourceSubreddit: string;
+  title: string;
+  content: string;
+  url: string;
+  topic: string;
 };

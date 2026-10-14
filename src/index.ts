@@ -3,7 +3,9 @@ import http from "http";
 import dotenv from "dotenv";
 import { sendToTelegram } from "./Platform-ReplyHandle/sendToTelegram.js";
 import { sendToDiscord } from "./Platform-ReplyHandle/sendToDiscord.js";
-import { sendToReddit } from "./Platform-ReplyHandle/sendToReddit.js";
+import {
+  sendToReddit,
+} from "./Platform-ReplyHandle/sendToReddit.js";
 import { AIanswer } from "./AI.js";
 import prepareTelegramPost from "./utilis/Telegram/prepareTelegramPost.js";
 import { fileURLToPath } from "url";
@@ -14,6 +16,11 @@ import {
 } from "./utilis/cloudinary.js";
 import { setPictureToCloudinary } from "./utilis/setPictureToCloudinary.js";
 import { schedulePost } from "./queues/postWorker.js";
+import {
+  ensureRedditCrosspostScanner,
+  getRedditCrosspostTargets,
+} from "./queues/redditCrosspostQueue.js";
+import "./queues/redditCrosspostWorker.js";
 import { randomUUID } from "node:crypto";
 import { logError } from "./utilis/logError.js";
 import { managePosts } from "./utilis/managePosts.js";
@@ -30,6 +37,12 @@ const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
 
 dotenv.config();
+/*
+if (getRedditCrosspostTargets().length > 0) {
+  void ensureRedditCrosspostScanner().catch((error) => {
+    logError("Could not configure Reddit crosspost scanner", error);
+  });
+}*/
 
 const app = express();
 const port = process.env.PORT || 3500;
@@ -53,6 +66,7 @@ app.get("/SagePosterhealth", (_req, res) => {
 app.post("/set-picture-to-cloudinary", setPictureToCloudinary);
 
 app.post("/webhook", async (req, res) => {
+
   const requestId = randomUUID();
   const update = req.body?.message ?? req.body?.channel_post;
   const updateType = update?.photo?.length
@@ -163,6 +177,9 @@ app.post("/webhook", async (req, res) => {
       if (result.platforms.telegram) {
         result.platforms.telegram.media = processedMedia.media;
       }
+      if (result.platforms.reddit) {
+        result.platforms.reddit.media = processedMedia.media;
+      }
       if (result.platforms.discord) {
         result.platforms.discord.media = processedMedia.media;
       }
@@ -232,6 +249,7 @@ app.post("/webhook", async (req, res) => {
 
       const redditPost = result.platforms.reddit;
       if (redditPost?.enabled) {
+        redditPost.subreddit = "r/SageFrontier";
         if (!result.topic?.trim()) {
           throw new Error("A topic is required to save and manage Reddit posts");
         }

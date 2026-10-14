@@ -1,6 +1,6 @@
 import { Job, Queue } from "bullmq";
 import { logError } from "../utilis/logError.js";
-import type { ManagedPost, PostJobData } from "../Data-Structure/types.js";
+import type { ManagedPost, Platform, PostJobData } from "../Data-Structure/types.js";
 
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",

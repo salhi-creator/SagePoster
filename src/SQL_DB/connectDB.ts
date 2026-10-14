@@ -1,6 +1,9 @@
 import { Pool } from "pg";
 import dotenv from "dotenv";
-import type { ManagedPost } from "../Data-Structure/types.js";
+import type {
+  ManagedPost,
+  ScheduledRedditPostCandidate,
+} from "../Data-Structure/types.js";
 
 dotenv.config();
 
@@ -68,6 +71,17 @@ async function ensurePublishedPostsTable(): Promise<void> {
       CREATE INDEX IF NOT EXISTS published_reddit_posts_topic_date_idx
       ON published_reddit_posts (topic, published_at DESC)
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reddit_crosspost_history (
+        source_post_id TEXT NOT NULL,
+        target_subreddit TEXT NOT NULL,
+        crosspost_id TEXT,
+        url TEXT,
+        status TEXT NOT NULL DEFAULT 'processing',
+        published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (source_post_id, target_subreddit)
+      )
+    `);
     for (const table of [
       "published_telegram_posts",
       "published_discord_posts",
@@ -82,6 +96,92 @@ async function ensurePublishedPostsTable(): Promise<void> {
   })();
 
   await publishedPostsTable;
+}
+
+export async function getScheduledRedditCrosspostCandidates(
+  targetSubreddits: string[],
+  limit = 50,
+): Promise<ScheduledRedditPostCandidate[]> {
+  await ensurePublishedPostsTable();
+  const targets = [...new Set(targetSubreddits.map((value) => value.trim().replace(/^r\//i, "").toLowerCase()).filter(Boolean))];
+  if (!targets.length) return [];
+  const result = await pool.query<{
+    reddit_post_id: string;
+    subreddit: string;
+    title: string;
+    content: string;
+    url: string;
+    topic: string;
+  }>(
+    `SELECT p.reddit_post_id, p.subreddit, p.title, p.content, p.url, p.topic
+     FROM published_reddit_posts p
+     WHERE p.delivery_type = 'scheduled'
+       AND EXISTS (
+         SELECT 1 FROM UNNEST($1::text[]) AS target(name)
+         WHERE LOWER(target.name) <> LOWER(p.subreddit)
+           AND NOT EXISTS (
+             SELECT 1 FROM reddit_crosspost_history x
+             WHERE x.source_post_id = p.reddit_post_id
+               AND LOWER(x.target_subreddit) = LOWER(target.name)
+           )
+       )
+     ORDER BY p.published_at ASC
+     LIMIT $2`,
+    [targets, Math.max(1, Math.min(200, Math.floor(limit)))],
+  );
+  return result.rows.map((row) => ({
+    sourcePostId: row.reddit_post_id,
+    sourceSubreddit: row.subreddit,
+    title: row.title,
+    content: row.content,
+    url: row.url,
+    topic: row.topic,
+  }));
+}
+
+export async function hasRedditCrosspost(
+  sourcePostId: string,
+  targetSubreddit: string,
+): Promise<boolean> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `SELECT 1 FROM reddit_crosspost_history
+     WHERE source_post_id = $1 AND LOWER(target_subreddit) = LOWER($2) LIMIT 1`,
+    [sourcePostId, targetSubreddit],
+  );
+  return result && result?.rowCount ? result?.rowCount > 0 : false;
+}
+
+export async function reserveRedditCrosspost(input: {
+  sourcePostId: string;
+  targetSubreddit: string;
+}): Promise<boolean> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `INSERT INTO reddit_crosspost_history
+       (source_post_id, target_subreddit)
+     VALUES ($1, $2)
+     ON CONFLICT (source_post_id, target_subreddit) DO NOTHING`,
+    [input.sourcePostId, input.targetSubreddit],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function completeRedditCrosspost(input: {
+  sourcePostId: string;
+  targetSubreddit: string;
+  crosspostId: string;
+  url: string;
+}): Promise<boolean> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `UPDATE reddit_crosspost_history
+     SET status = 'published', crosspost_id = $3, url = $4, published_at = NOW()
+     WHERE source_post_id = $1 AND LOWER(target_subreddit) = LOWER($2)
+       AND status = 'processing'`,
+    [input.sourcePostId, input.targetSubreddit, input.crosspostId, input.url],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function getRecentRedditPosts(topic: string): Promise<string[]> {

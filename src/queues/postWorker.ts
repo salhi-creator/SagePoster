@@ -15,6 +15,10 @@ import type {
   PostJobData,
 } from "../Data-Structure/types.js";
 import { randomUUID } from "node:crypto";
+import {
+  ensureRedditCrosspostScanner,
+  getRedditCrosspostTargets,
+} from "./redditCrosspostQueue.js";
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: Number(process.env.REDIS_PORT || 6379),
@@ -46,6 +50,13 @@ export async function schedulePost(form: PostForm) {
     repeat === "every-hour" ||
     repeat === "every-day" ||
     repeat === "every-week";
+
+  const hasScheduledRedditPost =
+    form.platforms.reddit?.enabled === true &&
+    (startTime !== -1 || isRecurring);
+  if (hasScheduledRedditPost && getRedditCrosspostTargets().length > 0) {
+    await ensureRedditCrosspostScanner();
+  }
 
   const now = Date.now();
   const runAt = startTime === -1 ? now : Math.max(startTime, now);

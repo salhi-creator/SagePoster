@@ -76,7 +76,9 @@ async function getExperiment(
         type: "poll",
         question: data.question,
         options: data.options,
-        durationHours: data.durationHours,
+        ...(data.durationHours !== undefined
+          ? { durationHours: data.durationHours }
+          : {}),
         is_anonymous: true,
       };
     }

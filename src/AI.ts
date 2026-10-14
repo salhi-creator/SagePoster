@@ -22,6 +22,7 @@ let nextUnscopedPlatform = 0;
 
 function platformForOption(option?: TelegramOptions): AIPlatform | undefined {
   if (option === "manage-posts") return "LINKEDIN";
+  if (option === "reddit-crosspost-review") return "REDDIT";
   if (option === "sheduled-telegram" || option?.startsWith("tele")) {
     return "TELEGRAM";
   }
@@ -37,7 +38,7 @@ function platformMentionedInMessage(message: string): AIPlatform | undefined {
   const mentions = [
     { platform: "TELEGRAM" as const, index: message.search(/\btelegram\b/i) },
     { platform: "DISCORD" as const, index: message.search(/\bdiscord\b/i) },
-    { platform: "REDDIT" as const, index: message.search(/\breddit\b/i) },
+    { platform: "REDDIT" as const, index: message.search(/\breddit\b|redd\.it/i) },
     { platform: "LINKEDIN" as const, index: message.search(/\blinked\s?in\b/i) },
   ].filter((mention) => mention.index >= 0);
 
@@ -96,6 +97,16 @@ POST MANAGEMENT INSTRUCTIONS:
 ${instruction}
 
 MANAGEMENT INPUT (JSON):
+${message}
+`;
+  } else if (option === "reddit-crosspost-review") {
+    const promptPath = path.join(__dirname, "Prompts", "redditCrosspostReview.txt");
+    const instruction = await FileReader(promptPath);
+    msg = `
+REDDIT CROSSPOST RULE REVIEW:
+${instruction}
+
+CROSSPOST CHECK DATA (JSON):
 ${message}
 `;
   } else if (option === "sheduled-telegram") {

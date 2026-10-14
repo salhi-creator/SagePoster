@@ -1,0 +1,15 @@
+Review whether the source Reddit post has a clear conflict with the destination subreddit's listed rules. This check runs automatically, so be conservative when the rules or post are ambiguous.
+
+Return only JSON:
+{
+  "safeToCrosspost": true | false (boolean) ,
+  "reason": "brief reason based only on the supplied post and rules" (string)
+}
+
+Rules:
+- Use only the provided source post and destination rules. Do not invent rules or facts.
+- Set safeToCrosspost to false if the post clearly violates a listed rule or the available information is too ambiguous to assess safely.
+- Set safeToCrosspost to true only when no clear conflict appears in the supplied information.
+- This is advisory. Reddit and the destination moderators decide whether it is allowed.
+- Keep the reason brief and mention uncertainty where relevant.
+- Return only valid JSON.
