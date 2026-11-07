@@ -29,6 +29,7 @@ let publishedPostsTable: Promise<void> | undefined;
 
 async function ensurePublishedPostsTable(): Promise<void> {
   publishedPostsTable ??= (async () => {
+    // telegram insure the table and index
     await pool.query(`
       CREATE TABLE IF NOT EXISTS published_telegram_posts (
         id BIGSERIAL PRIMARY KEY,
@@ -41,6 +42,9 @@ async function ensurePublishedPostsTable(): Promise<void> {
       CREATE INDEX IF NOT EXISTS published_telegram_posts_topic_date_idx
       ON published_telegram_posts (topic, published_at DESC)
     `);
+
+    // discord insure the table and index
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS published_discord_posts (
         id BIGSERIAL PRIMARY KEY,
@@ -53,6 +57,9 @@ async function ensurePublishedPostsTable(): Promise<void> {
       CREATE INDEX IF NOT EXISTS published_discord_posts_topic_date_idx
       ON published_discord_posts (topic, published_at DESC)
     `);
+
+    // reddit insure the table and index
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS published_reddit_posts (
         id BIGSERIAL PRIMARY KEY,
@@ -71,6 +78,10 @@ async function ensurePublishedPostsTable(): Promise<void> {
       CREATE INDEX IF NOT EXISTS published_reddit_posts_topic_date_idx
       ON published_reddit_posts (topic, published_at DESC)
     `);
+
+    // reddit crossPostHistory
+
+    //SELECT e.name , e.salary  FROM employees e WHERE e.salary < (SELECT AVG(e.salary)  FROM employees  )
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reddit_crosspost_history (
         source_post_id TEXT NOT NULL,
@@ -103,7 +114,13 @@ export async function getScheduledRedditCrosspostCandidates(
   limit = 50,
 ): Promise<ScheduledRedditPostCandidate[]> {
   await ensurePublishedPostsTable();
-  const targets = [...new Set(targetSubreddits.map((value) => value.trim().replace(/^r\//i, "").toLowerCase()).filter(Boolean))];
+  const targets = [
+    ...new Set(
+      targetSubreddits
+        .map((value) => value.trim().replace(/^r\//i, "").toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
   if (!targets.length) return [];
   const result = await pool.query<{
     reddit_post_id: string;
@@ -129,6 +146,7 @@ export async function getScheduledRedditCrosspostCandidates(
      LIMIT $2`,
     [targets, Math.max(1, Math.min(200, Math.floor(limit)))],
   );
+  
   return result.rows.map((row) => ({
     sourcePostId: row.reddit_post_id,
     sourceSubreddit: row.subreddit,
@@ -139,6 +157,7 @@ export async function getScheduledRedditCrosspostCandidates(
   }));
 }
 
+/*SELECT departments.name AS  department_name , COUNT(*) AS employees_count , AVG(employees.salary) as avg_salary , CASE  WHEN employees_count >= 5 THEN "large" WHEN employees_count BETWEEN  2 AND 4 THEN "meduim" ELSE "small" END AS case , MAX(employees.salary) as Highest Salary   FROM employees RIGHT JOIN departments ON empoloyees.department_id  = departments.id ORDER BY employees_count ASC*/
 export async function hasRedditCrosspost(
   sourcePostId: string,
   targetSubreddit: string,
@@ -196,17 +215,38 @@ export async function getRecentRedditPosts(topic: string): Promise<string[]> {
 
 export async function savePublishedRedditPost(
   topic: string,
-  post: { subreddit: string; title: string; content: string; redditPostId: string; url: string },
+  post: {
+    subreddit: string;
+    title: string;
+    content: string;
+    redditPostId: string;
+    url: string;
+  },
   options: { deliveryType?: "one-time" | "scheduled"; postId?: string } = {},
 ): Promise<void> {
-  if (!topic.trim() || !post.subreddit.trim() || !post.title.trim() || !post.content.trim() || !post.redditPostId.trim()) return;
+  if (
+    !topic.trim() ||
+    !post.subreddit.trim() ||
+    !post.title.trim() ||
+    !post.content.trim() ||
+    !post.redditPostId.trim()
+  )
+    return;
   await ensurePublishedPostsTable();
   await pool.query(
     `INSERT INTO published_reddit_posts
       (topic, subreddit, title, content, reddit_post_id, url, delivery_type, post_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [topic, post.subreddit, post.title, post.content, post.redditPostId, post.url,
-      options.deliveryType ?? "one-time", options.postId ?? null],
+    [
+      topic,
+      post.subreddit,
+      post.title,
+      post.content,
+      post.redditPostId,
+      post.url,
+      options.deliveryType ?? "one-time",
+      options.postId ?? null,
+    ],
   );
 }
 
@@ -307,8 +347,15 @@ export async function getManageablePublishedPosts(
       [maxRows],
     ),
     pool.query<{
-      id: string; topic: string; subreddit: string; title: string; content: string;
-      reddit_post_id: string; url: string; published_at: Date; delivery_type: string;
+      id: string;
+      topic: string;
+      subreddit: string;
+      title: string;
+      content: string;
+      reddit_post_id: string;
+      url: string;
+      published_at: Date;
+      delivery_type: string;
     }>(
       `SELECT id, topic, subreddit, title, content, reddit_post_id, url, published_at, delivery_type
        FROM published_reddit_posts ORDER BY published_at DESC LIMIT $1`,
@@ -333,12 +380,14 @@ export async function getManageablePublishedPosts(
       publishedAt: new Date(row.published_at).toISOString(),
       contentPreview: row.content.slice(0, 240),
       content: row.content,
-      ...(row.platform === "reddit" ? {
-        externalPostId: row.reddit_post_id,
-        url: row.url,
-        subreddit: row.subreddit,
-        title: row.title,
-      } : {}),
+      ...(row.platform === "reddit"
+        ? {
+            externalPostId: row.reddit_post_id,
+            url: row.url,
+            subreddit: row.subreddit,
+            title: row.title,
+          }
+        : {}),
       deliveryType:
         row.delivery_type === "scheduled"
           ? ("scheduled" as const)
@@ -357,11 +406,12 @@ export async function deleteManagedPublishedPost(
   const match = /^published:(telegram|discord|reddit):(\d+)$/.exec(postId);
   if (!match) return false;
   const [, platform, id] = match;
-  const table = platform === "telegram"
-    ? "published_telegram_posts"
-    : platform === "discord"
-      ? "published_discord_posts"
-      : "published_reddit_posts";
+  const table =
+    platform === "telegram"
+      ? "published_telegram_posts"
+      : platform === "discord"
+        ? "published_discord_posts"
+        : "published_reddit_posts";
   const result = await pool.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
   return (result.rowCount ?? 0) > 0;
 }
