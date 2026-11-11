@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { createHash } from "node:crypto";
 import dotenv from "dotenv";
 import type {
   ManagedPost,
@@ -91,6 +92,20 @@ async function ensurePublishedPostsTable(): Promise<void> {
         status TEXT NOT NULL DEFAULT 'processing',
         published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (source_post_id, target_subreddit)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reddit_agent_drafts (
+        draft_id TEXT PRIMARY KEY,
+        subreddit TEXT NOT NULL,
+        topic TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        content_fingerprint TEXT NOT NULL,
+        redis_stream_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (subreddit, content_fingerprint)
       )
     `);
     for (const table of [
@@ -211,6 +226,167 @@ export async function getRecentRedditPosts(topic: string): Promise<string[]> {
     [topic],
   );
   return result.rows.map((row) => row.content);
+}
+
+export type RedditContentHistoryEntry = {
+  topic: string;
+  subreddit: string;
+  title: string;
+  content: string;
+  publishedAt: string;
+};
+
+export type PendingRedditDraftInput = {
+  draftId: string;
+  subreddit: string;
+  topic: string;
+  title: string;
+  content: string;
+};
+
+function redditDraftFingerprint(title: string, content: string): string {
+  const normalized = `${title}\n${content}`
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+export async function getLatestRedditContentHistory(
+  subreddit: string,
+  limit = 20,
+): Promise<RedditContentHistoryEntry[]> {
+  await ensurePublishedPostsTable();
+  const normalizedSubreddit = subreddit.trim().replace(/^r\//i, "").toLowerCase();
+  if (!normalizedSubreddit) return [];
+  const result = await pool.query<{
+    topic: string;
+    subreddit: string;
+    title: string;
+    content: string;
+    published_at: Date;
+  }>(
+    `SELECT topic, subreddit, title, content, published_at
+     FROM published_reddit_posts
+     WHERE LOWER(REGEXP_REPLACE(subreddit, '^r/', '', 'i')) = $1
+     ORDER BY published_at DESC
+     LIMIT $2`,
+    [normalizedSubreddit, Math.max(1, Math.min(20, Math.floor(limit)))],
+  );
+  return result.rows.map((row) => ({
+    topic: row.topic,
+    subreddit: row.subreddit,
+    title: row.title,
+    content: row.content,
+    publishedAt: new Date(row.published_at).toISOString(),
+  }));
+}
+
+export async function getLatestPublishedRedditPostId(): Promise<string | null> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query<{ reddit_post_id: string }>(
+    `SELECT reddit_post_id
+     FROM published_reddit_posts
+     WHERE reddit_post_id <> ''
+     ORDER BY published_at DESC
+     LIMIT 1`,
+  );
+  return result.rows[0]?.reddit_post_id ?? null;
+}
+
+/**
+ * Rechecks recent published content and pending drafts while holding a
+ * subreddit-scoped advisory lock, then inserts the draft if it is unique.
+ */
+export async function savePendingRedditDraftIfUnique(
+  input: PendingRedditDraftInput,
+): Promise<{ saved: boolean; duplicate?: { topic: string; title: string } }> {
+  await ensurePublishedPostsTable();
+  const subreddit = input.subreddit.trim().replace(/^r\//i, "").toLowerCase();
+  const topic = input.topic.trim();
+  const title = input.title.trim();
+  const content = input.content.trim();
+  if (!subreddit || !topic || !title || !content || !input.draftId.trim()) {
+    throw new Error("A Reddit draft requires a subreddit, topic, title, and content");
+  }
+
+  const fingerprint = redditDraftFingerprint(title, content);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `reddit-content-creator:${subreddit}`,
+    ]);
+
+    const published = await client.query<{
+      topic: string;
+      title: string;
+      content: string;
+    }>(
+      `SELECT topic, title, content
+       FROM published_reddit_posts
+       WHERE LOWER(REGEXP_REPLACE(subreddit, '^r/', '', 'i')) = $1
+       ORDER BY published_at DESC
+       LIMIT 20`,
+      [subreddit],
+    );
+    const pending = await client.query<{
+      topic: string;
+      title: string;
+      content: string;
+    }>(
+      `SELECT topic, title, content
+       FROM reddit_agent_drafts
+       WHERE subreddit = $1 AND status = 'pending'
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [subreddit],
+    );
+    const duplicate = [...published.rows, ...pending.rows].find(
+      (row) => redditDraftFingerprint(row.title, row.content) === fingerprint,
+    );
+    if (duplicate) {
+      await client.query("ROLLBACK");
+      return {
+        saved: false,
+        duplicate: { topic: duplicate.topic, title: duplicate.title },
+      };
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO reddit_agent_drafts
+         (draft_id, subreddit, topic, title, content, status, content_fingerprint)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+       ON CONFLICT (subreddit, content_fingerprint) DO NOTHING
+       RETURNING draft_id`,
+      [input.draftId, subreddit, topic, title, content, fingerprint],
+    );
+    await client.query("COMMIT");
+    if (inserted.rowCount === 0) {
+      return { saved: false, duplicate: { topic, title } };
+    }
+    return { saved: true };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function setRedditDraftStreamId(
+  draftId: string,
+  streamId: string,
+): Promise<boolean> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `UPDATE reddit_agent_drafts
+     SET redis_stream_id = $2
+     WHERE draft_id = $1 AND status = 'pending'`,
+    [draftId, streamId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function savePublishedRedditPost(

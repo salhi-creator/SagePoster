@@ -52,6 +52,8 @@ export type DiscordPost = {
   }[];
 };
 
+export type RedditManagementMode = "shadow" | "assistant" | "owner";
+
 export type PostForm = {
   "current-state": "still-negotiate" | "submit" | "schedule-post" | "managing";
 
@@ -71,6 +73,8 @@ export type PostForm = {
       subreddit: string;
       title: string;
       content: string;
+      manage: boolean;
+      "manage-mode": RedditManagementMode | null;
       media: {
         type: "image" | "video" | null;
         url: string | null;
@@ -190,6 +194,8 @@ export type AIOption =
   | "discord"
   | "reddit"
   | "reddit-crosspost-review"
+  | "reddit-content-creator"
+  | "reddit-community-analyzer"
   | "linkedin";
 
 export const telegramReactions = [

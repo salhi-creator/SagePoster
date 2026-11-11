@@ -23,6 +23,8 @@ let nextUnscopedPlatform = 0;
 function platformForOption(option?: TelegramOptions): AIPlatform | undefined {
   if (option === "manage-posts") return "LINKEDIN";
   if (option === "reddit-crosspost-review") return "REDDIT";
+  if (option === "reddit-content-creator") return "REDDIT";
+  if (option === "reddit-community-analyzer") return "REDDIT";
   if (option === "sheduled-telegram" || option?.startsWith("tele")) {
     return "TELEGRAM";
   }
@@ -107,6 +109,26 @@ REDDIT CROSSPOST RULE REVIEW:
 ${instruction}
 
 CROSSPOST CHECK DATA (JSON):
+${message}
+`;
+  } else if (option === "reddit-content-creator") {
+    const promptPath = path.join(__dirname, "Prompts", "redditContentCreator.txt");
+    const instruction = await FileReader(promptPath);
+    msg = `
+REDDIT CONTENT CREATOR AGENT:
+${instruction}
+
+COMMUNITY AND POST HISTORY (JSON):
+${message}
+`;
+  } else if (option === "reddit-community-analyzer") {
+    const promptPath = path.join(__dirname, "Prompts", "redditCommunityAnalyzer.txt");
+    const instruction = await FileReader(promptPath);
+    msg = `
+REDDIT COMMUNITY ANALYZER AGENT:
+${instruction}
+
+COMMUNITY RULES, CONTEXT, AND CANDIDATE DRAFT (JSON):
 ${message}
 `;
   } else if (option === "sheduled-telegram") {

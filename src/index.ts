@@ -15,6 +15,7 @@ import {
   saveTelegramPicturesToCloudinary,
 } from "./utilis/cloudinary.js";
 import { setPictureToCloudinary } from "./utilis/setPictureToCloudinary.js";
+import { handleRedditManagementIntent } from "./utilis/handleRedditManagementIntent.js";
 import { schedulePost } from "./queues/postWorker.js";
 import {
   ensureRedditCrosspostScanner,
@@ -171,6 +172,9 @@ app.post("/webhook", async (req, res) => {
       return;
     }
     console.info("[AI] Received Data", result);
+
+    // Separate Reddit community-management intent from publishing and saved-post management.
+    if (await handleRedditManagementIntent(result, chatId)) return;
 
     // Keep uploaded media authoritative; the planner should not drop album items.
     if (processedMedia.media.length > 0) {
