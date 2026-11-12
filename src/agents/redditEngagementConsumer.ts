@@ -11,9 +11,14 @@ import {
 import {
   claimRedditEngagementComment,
   finishRedditEngagementComment,
+  hasRedditEngagementComment,
 } from "../SQL_DB/connectDB.js";
 import { logError } from "../utilis/logError.js";
-import { getRedditManagementMode } from "../caching_redis/redditAgentStream.js";
+import {
+  getRedditManagementMode,
+  replacePendingRedditActivityWithClassifiedComments,
+} from "../caching_redis/redditAgentStream.js";
+import { analyzeRedditCommentsAgainstRules } from "./redditCommunityAnalyzer.js";
 
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
@@ -29,6 +34,7 @@ const redis = new Redis(connection);
 type StreamMessage = { id: string; fields: Record<string, string> };
 type EngagementEvent = {
   type: "post" | "comment";
+  status: "pending" | "approved";
   createdAt: string;
   ids: string[];
   details: Record<string, unknown>;
@@ -63,7 +69,11 @@ function decodeMessages(result: unknown): StreamMessage[] {
 }
 
 function parseEvent(fields: Record<string, string>): EngagementEvent | null {
-  if (fields.status !== "pending" || (fields.type !== "post" && fields.type !== "comment")) return null;
+  if (
+    (fields.status !== "pending" && fields.status !== "approved") ||
+    (fields.type !== "post" && fields.type !== "comment") ||
+    fields.event !== `events-${fields.type}`
+  ) return null;
   let ids: unknown;
   let details: unknown;
   try {
@@ -80,6 +90,7 @@ function parseEvent(fields: Record<string, string>): EngagementEvent | null {
   ) return null;
   return {
     type: fields.type,
+    status: fields.status,
     createdAt: fields.createdAt ?? "",
     ids,
     details: details as Record<string, unknown>,
@@ -217,10 +228,21 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
       continue;
     }
 
-    const candidates = context.comments.filter(
+    const externalComments = context.comments.filter(
       (comment) => !comment.removed && comment.author && !isOwner(comment.author, owner),
     );
-    const selected = randomSample(candidates);
+    const unseenComments = await Promise.all(
+      externalComments.map(async (comment) =>
+        (await hasRedditEngagementComment(comment.commentId)) ? null : comment,
+      ),
+    );
+    const candidates = unseenComments.filter(
+      (comment): comment is RedditCommunityComment => comment !== null,
+    );
+    const eventIds = new Set(event.ids.map((id) => asFullname(id, "comment")));
+    const selected = event.status === "approved"
+      ? candidates.filter((comment) => eventIds.has(asFullname(comment.commentId, "comment")))
+      : randomSample(candidates);
     console.info("[Reddit engagement] Selected comment candidates", {
       streamId,
       subreddit: context.subreddit,
@@ -228,7 +250,59 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
       selected: selected.length,
     });
 
-    for (const comment of selected) {
+    if (!selected.length) {
+      if (event.status === "pending") await redis.xdel(streamName, streamId);
+      continue;
+    }
+
+    const postRecord = context.post as Record<string, unknown>;
+    const sourcePostId = text(postRecord.postId) ?? text(postRecord.id) ??
+      (event.type === "post" ? sourceId : text(event.details.postId) ?? "");
+    if (!sourcePostId) throw new Error("Event context is missing the source post ID for rule screening");
+    let approvedComments = selected;
+    if (event.status === "pending") {
+      const screening = await analyzeRedditCommentsAgainstRules({
+        subreddit: context.subreddit,
+        sourcePostId,
+        post: {
+          title: text(postRecord.title) ?? "",
+          content: text(postRecord.content) ?? text(postRecord.body) ?? "",
+        },
+        comments: selected.map(({ commentId, body, author }) => ({ commentId, body, author })),
+      });
+      for (const commentId of screening.rejectedIds) {
+        if (await claimRedditEngagementComment(commentId, context.subreddit)) {
+          await finishRedditEngagementComment({
+            commentId,
+            status: "rejected",
+            reason: screening.reasons[commentId],
+          });
+        }
+      }
+
+      await replacePendingRedditActivityWithClassifiedComments({
+        originalStreamId: streamId,
+        createdAt: new Date().toISOString(),
+        subreddit: context.subreddit,
+        postId: sourcePostId,
+        approvedIds: screening.approvedIds,
+        rejectedIds: screening.rejectedIds,
+        reasons: screening.reasons,
+      });
+      console.info("[Reddit engagement] Replaced pending event with classification events", {
+        streamId,
+        approvedCount: screening.approvedIds.length,
+        rejectedCount: screening.rejectedIds.length,
+      });
+      return;
+    }
+
+    console.info("[Reddit engagement] Processing rule-approved comments", {
+      approvedCount: approvedComments.length,
+      subreddit: context.subreddit,
+    });
+
+    for (const comment of approvedComments) {
       if (!(await claimRedditEngagementComment(comment.commentId, context.subreddit))) continue;
       try {
         const reply = await createReply(context.post, comment, context.comments.slice(-12));

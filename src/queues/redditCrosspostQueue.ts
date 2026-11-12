@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { Queue } from "bullmq";
-import type { ScheduledRedditPostCandidate } from "../Data-Structure/types.js";
 
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
@@ -9,11 +7,7 @@ const connection = {
   password: process.env.REDIS_PASSWORD || undefined,
 };
 
-export type RedditCrosspostJobData = {
-  kind: "crosspost";
-  candidate: ScheduledRedditPostCandidate;
-  targetSubreddit: string;
-} | { kind: "scan" };
+export type RedditCrosspostJobData = { kind: "scan" };
 
 export const redditCrosspostQueue = new Queue<RedditCrosspostJobData>(
   "reddit-crosspost",
@@ -40,26 +34,6 @@ export async function ensureRedditCrosspostScanner(): Promise<void> {
     { name: "scan-scheduled-reddit-posts", data: { kind: "scan" } },
   );
   console.info("[Reddit crosspost] Periodic scanner configured", { everyDays: days });
-}
-
-export async function enqueueRedditCrosspost(
-  candidate: ScheduledRedditPostCandidate,
-  targetSubreddit: string,
-): Promise<void> {
-  const jobId = createHash("sha256")
-    .update(`${candidate.sourcePostId}:${targetSubreddit.toLowerCase()}`)
-    .digest("hex");
-  await redditCrosspostQueue.add(
-    "crosspost-scheduled-post",
-    { kind: "crosspost", candidate, targetSubreddit },
-    {
-      jobId: `reddit-crosspost-${jobId}`,
-      attempts: 3,
-      backoff: { type: "exponential", delay: 10_000 },
-      removeOnComplete: true,
-      removeOnFail: false,
-    },
-  );
 }
 
 redditCrosspostQueue.on("error", (error) => {

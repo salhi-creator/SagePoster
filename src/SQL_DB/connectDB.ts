@@ -115,9 +115,13 @@ async function ensurePublishedPostsTable(): Promise<void> {
         status TEXT NOT NULL DEFAULT 'processing',
         reply_id TEXT,
         reply_body TEXT,
+        reason TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    await pool.query(
+      `ALTER TABLE reddit_engagement_replies ADD COLUMN IF NOT EXISTS reason TEXT`,
+    );
     for (const table of [
       "published_telegram_posts",
       "published_discord_posts",
@@ -413,18 +417,28 @@ export async function claimRedditEngagementComment(
   return (result.rowCount ?? 0) > 0;
 }
 
+export async function hasRedditEngagementComment(commentId: string): Promise<boolean> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `SELECT 1 FROM reddit_engagement_replies WHERE comment_id = $1 LIMIT 1`,
+    [commentId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function finishRedditEngagementComment(input: {
   commentId: string;
-  status: "replied" | "skipped";
+  status: "replied" | "skipped" | "rejected";
   replyId?: string;
   replyBody?: string;
+  reason?: string;
 }): Promise<void> {
   await ensurePublishedPostsTable();
   await pool.query(
     `UPDATE reddit_engagement_replies
-     SET status = $2, reply_id = $3, reply_body = $4, updated_at = NOW()
+     SET status = $2, reply_id = $3, reply_body = $4, reason = $5, updated_at = NOW()
      WHERE comment_id = $1 AND status = 'processing'`,
-    [input.commentId, input.status, input.replyId ?? null, input.replyBody ?? null],
+    [input.commentId, input.status, input.replyId ?? null, input.replyBody ?? null, input.reason ?? null],
   );
 }
 

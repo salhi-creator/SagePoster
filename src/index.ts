@@ -24,6 +24,7 @@ import {
 } from "./queues/redditCrosspostQueue.js";
 import "./queues/redditCrosspostWorker.js";
 import "./agents/redditEngagementConsumer.js";
+import "./agents/crosspost-handler.js";
 import { randomUUID } from "node:crypto";
 import { logError } from "./utilis/logError.js";
 import { managePosts } from "./utilis/managePosts.js";
@@ -40,12 +41,11 @@ const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
 
 dotenv.config();
-/*
 if (getRedditCrosspostTargets().length > 0) {
   void ensureRedditCrosspostScanner().catch((error) => {
     logError("Could not configure Reddit crosspost scanner", error);
   });
-}*/
+}
 
 const app = express();
 const port = process.env.PORT || 3500;

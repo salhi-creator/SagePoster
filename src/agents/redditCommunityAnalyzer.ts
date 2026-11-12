@@ -19,6 +19,12 @@ export type RedditDraftReview = {
   ruleFeedback: string[];
 };
 
+export type RedditCommentRuleAnalysis = {
+  approvedIds: string[];
+  rejectedIds: string[];
+  reasons: Record<string, string>;
+};
+
 function normalizeSubreddit(value: string): string {
   return value.trim().replace(/^r\//i, "").toLowerCase();
 }
@@ -114,4 +120,70 @@ export async function reviewRedditDraftAgainstCommunity(
     recentCommunityPostCount: context.recentCommunityPosts.length,
   });
   return review;
+}
+
+/** Screen engagement candidates against the actual subreddit rules. */
+export async function analyzeRedditCommentsAgainstRules(input: {
+  subreddit: string;
+  sourcePostId: string;
+  post: { title: string; content: string };
+  comments: { commentId: string; body: string; author: string | null }[];
+}): Promise<RedditCommentRuleAnalysis> {
+  if (!input.comments.length) return { approvedIds: [], rejectedIds: [], reasons: {} };
+
+  const checked = await checkRedditCrosspost({
+    sourcePostId: input.sourcePostId,
+    targetSubreddit: input.subreddit,
+    title: null,
+  });
+  const result = await AIanswer(
+    JSON.stringify({
+      subreddit: checked.targetSubreddit,
+      rules: checked.rules,
+      post: input.post,
+      comments: input.comments,
+    }),
+    "reddit-comment-analyzer",
+  );
+  if (!result || typeof result !== "object") {
+    throw new Error("Reddit comment analyzer returned no classification");
+  }
+
+  const output = result as Record<string, unknown>;
+  const approvedIds = Array.isArray(output.approvedIds)
+    ? output.approvedIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const rejectedIds = Array.isArray(output.rejectedIds)
+    ? output.rejectedIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const suppliedIds = input.comments.map((comment) => comment.commentId);
+  const classified = [...approvedIds, ...rejectedIds];
+  if (
+    approvedIds.length + rejectedIds.length !== suppliedIds.length ||
+    new Set(classified).size !== classified.length ||
+    suppliedIds.some((id) => !classified.includes(id)) ||
+    classified.some((id) => !suppliedIds.includes(id))
+  ) {
+    throw new Error("Reddit comment analyzer did not return an exact, non-overlapping ID partition");
+  }
+
+  const rawReasons = output.reasons;
+  const reasons: Record<string, string> = {};
+  if (rawReasons && typeof rawReasons === "object" && !Array.isArray(rawReasons)) {
+    for (const id of rejectedIds) {
+      const reason = (rawReasons as Record<string, unknown>)[id];
+      if (typeof reason === "string" && reason.trim()) reasons[id] = reason.trim();
+    }
+  }
+  for (const id of rejectedIds) {
+    reasons[id] ??= "Rejected by the subreddit rules screening.";
+  }
+
+  console.info("[Reddit community analyzer] Comment screening completed", {
+    subreddit: checked.targetSubreddit,
+    approvedCount: approvedIds.length,
+    rejectedCount: rejectedIds.length,
+    ruleCount: checked.rules.length,
+  });
+  return { approvedIds, rejectedIds, reasons };
 }
