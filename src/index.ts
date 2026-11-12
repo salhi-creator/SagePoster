@@ -16,12 +16,14 @@ import {
 } from "./utilis/cloudinary.js";
 import { setPictureToCloudinary } from "./utilis/setPictureToCloudinary.js";
 import { handleRedditManagementIntent } from "./utilis/handleRedditManagementIntent.js";
+import { receiveRedditEvents } from "./utilis/receiveRedditEvents.js";
 import { schedulePost } from "./queues/postWorker.js";
 import {
   ensureRedditCrosspostScanner,
   getRedditCrosspostTargets,
 } from "./queues/redditCrosspostQueue.js";
 import "./queues/redditCrosspostWorker.js";
+import "./agents/redditEngagementConsumer.js";
 import { randomUUID } from "node:crypto";
 import { logError } from "./utilis/logError.js";
 import { managePosts } from "./utilis/managePosts.js";
@@ -65,6 +67,7 @@ app.get("/SagePosterhealth", (_req, res) => {
 });
 
 app.post("/set-picture-to-cloudinary", setPictureToCloudinary);
+app.post("/reddit-events", receiveRedditEvents);
 
 app.post("/webhook", async (req, res) => {
 

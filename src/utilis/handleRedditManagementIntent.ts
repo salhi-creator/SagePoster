@@ -5,6 +5,7 @@ import {
   RedditDraftStreamEnqueueError,
 } from "../agents/redditContentCreator.js";
 import { logError } from "./logError.js";
+import { setRedditManagementMode } from "../caching_redis/redditAgentStream.js";
 
 const REDDIT_MANAGEMENT_MODES: RedditManagementMode[] = [
   "shadow",
@@ -41,6 +42,8 @@ export async function handleRedditManagementIntent(
   const message = mode
     ? `Reddit community management request recognized in ${mode} mode. Management actions are not active yet.`
     : "I couldn't identify a valid Reddit management mode. Please ask for shadow (analysis only), assistant (approval required), or owner (full control).";
+
+  if (mode) await setRedditManagementMode(reddit.subreddit, mode);
 
   if (mode === "owner") {
     try {

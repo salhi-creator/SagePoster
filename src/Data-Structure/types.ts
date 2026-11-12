@@ -196,6 +196,7 @@ export type AIOption =
   | "reddit-crosspost-review"
   | "reddit-content-creator"
   | "reddit-community-analyzer"
+  | "reddit-engagement-reply"
   | "linkedin";
 
 export const telegramReactions = [

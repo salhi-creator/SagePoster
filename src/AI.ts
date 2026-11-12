@@ -25,6 +25,7 @@ function platformForOption(option?: TelegramOptions): AIPlatform | undefined {
   if (option === "reddit-crosspost-review") return "REDDIT";
   if (option === "reddit-content-creator") return "REDDIT";
   if (option === "reddit-community-analyzer") return "REDDIT";
+  if (option === "reddit-engagement-reply") return "REDDIT";
   if (option === "sheduled-telegram" || option?.startsWith("tele")) {
     return "TELEGRAM";
   }
@@ -129,6 +130,16 @@ REDDIT COMMUNITY ANALYZER AGENT:
 ${instruction}
 
 COMMUNITY RULES, CONTEXT, AND CANDIDATE DRAFT (JSON):
+${message}
+`;
+  } else if (option === "reddit-engagement-reply") {
+    const promptPath = path.join(__dirname, "Prompts", "redditEngagementReply.txt");
+    const instruction = await FileReader(promptPath);
+    msg = `
+REDDIT ENGAGEMENT AGENT:
+${instruction}
+
+POST AND COMMENT CONTEXT (JSON):
 ${message}
 `;
   } else if (option === "sheduled-telegram") {

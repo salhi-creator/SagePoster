@@ -108,6 +108,16 @@ async function ensurePublishedPostsTable(): Promise<void> {
         UNIQUE (subreddit, content_fingerprint)
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reddit_engagement_replies (
+        comment_id TEXT PRIMARY KEY,
+        subreddit TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing',
+        reply_id TEXT,
+        reply_body TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
     for (const table of [
       "published_telegram_posts",
       "published_discord_posts",
@@ -387,6 +397,35 @@ export async function setRedditDraftStreamId(
     [draftId, streamId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function claimRedditEngagementComment(
+  commentId: string,
+  subreddit: string,
+): Promise<boolean> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `INSERT INTO reddit_engagement_replies (comment_id, subreddit, status)
+     VALUES ($1, $2, 'processing')
+     ON CONFLICT (comment_id) DO NOTHING`,
+    [commentId, subreddit],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function finishRedditEngagementComment(input: {
+  commentId: string;
+  status: "replied" | "skipped";
+  replyId?: string;
+  replyBody?: string;
+}): Promise<void> {
+  await ensurePublishedPostsTable();
+  await pool.query(
+    `UPDATE reddit_engagement_replies
+     SET status = $2, reply_id = $3, reply_body = $4, updated_at = NOW()
+     WHERE comment_id = $1 AND status = 'processing'`,
+    [input.commentId, input.status, input.replyId ?? null, input.replyBody ?? null],
+  );
 }
 
 export async function savePublishedRedditPost(

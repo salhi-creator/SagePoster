@@ -28,6 +28,17 @@ export type RedditCommunityPost = {
   content: string;
   subreddit: string;
   url: string | null;
+  author: string | null;
+};
+
+export type RedditCommunityComment = {
+  commentId: string;
+  postId: string;
+  parentId: string | null;
+  body: string;
+  author: string | null;
+  permalink: string | null;
+  removed: boolean;
 };
 
 function endpoint(path: string): string {
@@ -95,7 +106,40 @@ function parseCommunityPost(value: unknown, requestedSubreddit: string): RedditC
         ? nestedPost.subreddit
         : requestedSubreddit,
     url: typeof nestedPost.url === "string" ? nestedPost.url : null,
+    author: typeof nestedPost.author === "string" ? nestedPost.author : null,
   };
+}
+
+function parseCommunityComment(value: unknown): RedditCommunityComment | null {
+  if (!value || typeof value !== "object") return null;
+  const comment = value as Record<string, unknown>;
+  const commentId = typeof comment.id === "string" ? comment.id.trim() : "";
+  const postId = typeof comment.postId === "string" ? comment.postId.trim() : "";
+  const body = typeof comment.body === "string" ? comment.body.trim() : "";
+  if (!commentId || !postId || !body) return null;
+  return {
+    commentId,
+    postId,
+    parentId: typeof comment.parentId === "string" ? comment.parentId : null,
+    body,
+    author: typeof comment.author === "string" ? comment.author : null,
+    permalink: typeof comment.permalink === "string" ? comment.permalink : null,
+    removed: comment.removed === true,
+  };
+}
+
+function extractList(payload: unknown, key: string): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  const record = payload as Record<string, unknown>;
+  const value = record[key] ?? record.data;
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    const nested = value as Record<string, unknown>;
+    const list = nested[key] ?? nested.items;
+    return Array.isArray(list) ? list : [];
+  }
+  return [];
 }
 
 /** Fetches community posts from the Devvit service GET /posts endpoint. */
@@ -105,28 +149,53 @@ export async function getRedditSubredditPosts(
 ): Promise<RedditCommunityPost[]> {
   const subreddit = subredditInput.trim().replace(/^r\//i, "");
   if (!subreddit) throw new Error("A subreddit is required to fetch community posts");
-  const cappedLimit = Math.max(1, Math.min(12, Math.floor(limit)));
+  const cappedLimit = Math.max(1, Math.min(30, Math.floor(limit)));
   const query = new URLSearchParams({ subreddit, limit: String(cappedLimit) });
   const payload = await requestGet<unknown>(`/posts?${query.toString()}`);
-  const records = Array.isArray(payload)
-    ? payload
-    : payload && typeof payload === "object"
-      ? (() => {
-          const response = payload as Record<string, unknown>;
-          const nested = response.posts ?? response.data;
-          if (Array.isArray(nested)) return nested;
-          if (nested && typeof nested === "object") {
-            const nestedRecord = nested as Record<string, unknown>;
-            const nestedPosts = nestedRecord.posts ?? nestedRecord.items;
-            return Array.isArray(nestedPosts) ? nestedPosts : [];
-          }
-          return [];
-        })()
-      : [];
+  const records = extractList(payload, "posts");
   return records
     .map((record) => parseCommunityPost(record, subreddit))
     .filter((post): post is RedditCommunityPost => post !== null)
     .slice(0, cappedLimit);
+}
+
+export async function getRedditPostComments(
+  postIdInput: string,
+  limit = 100,
+): Promise<RedditCommunityComment[]> {
+  const postId = postIdInput.trim();
+  if (!postId) throw new Error("A post ID is required to fetch Reddit comments");
+  const cappedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const query = new URLSearchParams({ postId, limit: String(cappedLimit) });
+  const payload = await requestGet<unknown>(`/comments?${query.toString()}`);
+  return extractList(payload, "comments")
+    .map(parseCommunityComment)
+    .filter((comment): comment is RedditCommunityComment => comment !== null)
+    .slice(0, cappedLimit);
+}
+
+export async function replyToRedditComment(input: {
+  commentId: string;
+  body: string;
+}): Promise<{ commentId: string; body: string; idempotencyKey?: string }> {
+  const commentId = input.commentId.trim();
+  const body = input.body.trim();
+  if (!commentId || !body) throw new Error("A Reddit comment ID and reply body are required");
+  const response = await request<{
+    ok?: boolean;
+    commentId?: string;
+    body?: string;
+    idempotencyKey?: string | null;
+    error?: string;
+  }>("/comments/reply", { commentId, body });
+  if (!response.commentId || typeof response.body !== "string") {
+    throw new Error(response.error || "Reddit service returned an incomplete comment reply response");
+  }
+  return {
+    commentId: response.commentId,
+    body: typeof response.body === "string" ? response.body : body,
+    ...(response.idempotencyKey ? { idempotencyKey: response.idempotencyKey } : {}),
+  };
 }
 
 export async function sendToReddit(post: {
