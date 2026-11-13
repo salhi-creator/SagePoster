@@ -199,7 +199,14 @@ export async function enqueueAndWaitRedditAction(input: {
       }
       const value = parsed as Record<string, unknown>;
       if (value.status === "cancelled") {
-        throw new Error(`Reddit action ${actionId} was cancelled by management mode`);
+        const result = value.result && typeof value.result === "object"
+          ? value.result as Record<string, unknown>
+          : {};
+        throw new Error(
+          typeof result.reason === "string"
+            ? `Reddit action ${actionId} was cancelled: ${result.reason}`
+            : `Reddit action ${actionId} was cancelled`,
+        );
       }
       if (value.status !== "published" && value.status !== "removed") {
         throw new Error(`Reddit action ${actionId} returned an unsupported status`);

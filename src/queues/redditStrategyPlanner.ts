@@ -56,6 +56,8 @@ function parseIntervals(value: unknown): { intervals: Record<RedditAgentName, nu
       ? interval
       : defaultIntervals[agent];
   }
+  intervals.content_creator = Math.max(12, intervals.content_creator);
+  intervals.crosspost_handler = Math.max(12, intervals.crosspost_handler);
   return {
     intervals,
     reason: typeof root.reason === "string" ? root.reason.trim() : "No planner reason returned",
@@ -74,13 +76,20 @@ async function scheduleAgentsFromStream(): Promise<void> {
     JSON.stringify({
       managedSubreddits: activeSubreddits,
       recentEvents,
-      intervalConstraintsHours: { min: 1, max: 24 },
+      intervalConstraintsHours: {
+        min: 1,
+        max: 24,
+        content_creator: { min: 12, max: 24 },
+        crosspost_handler: { min: 12, max: 24 },
+      },
     }),
     "reddit-strategy-planner",
   );
   const plan = parseIntervals(result);
 
   for (const agent of REDDIT_AGENT_NAMES) {
+    // Two crosspost scans per rolling day, at most; the DB reservation also
+    // enforces a hard cap of two actual crossposts in any 24-hour window.
     const intervalHours = plan.intervals[agent];
     await redditAgentQueue.upsertJobScheduler(
       `reddit-agent-${agent}`,
@@ -111,9 +120,10 @@ async function runAgent(agent: RedditAgentName): Promise<void> {
       for (const subreddit of subreddits) {
         try {
           const draft = await createPendingRedditContentDraft(subreddit);
-          console.info("[Reddit content creator] Scheduled draft created", {
+          console.info("[Reddit content creator] Reviewed draft queued for Action Executor", {
             draftId: draft.draftId,
             subreddit,
+            streamId: draft.streamId,
           });
         } catch (error) {
           logError("Scheduled Reddit content creation failed", error, { subreddit });

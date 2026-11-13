@@ -58,7 +58,7 @@ export async function handleRedditManagementIntent(
       const truncated = draft.content.length > preview.length ? "\n…(preview shortened)" : "";
       await sendMessageBackToMe(
         String(chatId),
-        `Reddit content draft created with pending status. It has not been published.\nDraft ID: ${draft.draftId}\nSubreddit: r/${draft.subreddit}\nTopic: ${draft.topic}\n\n${draft.title}\n\n${preview}${truncated}`,
+        `Reddit draft passed the community-rules check and was queued for the Action Executor to publish.\nDraft ID: ${draft.draftId}\nSubreddit: r/${draft.subreddit}\nTopic: ${draft.topic}\n\n${draft.title}\n\n${preview}${truncated}`,
       );
       return true;
     } catch (error) {

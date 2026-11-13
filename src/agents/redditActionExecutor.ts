@@ -10,8 +10,14 @@ import {
   sendToReddit,
 } from "../Platform-ReplyHandle/sendToReddit.js";
 import {
+  completeRedditPostPublication,
   completeRedditCrosspost,
   finishRedditEngagementComment,
+  markRedditDraftCancelled,
+  markRedditDraftPending,
+  markRedditDraftPublished,
+  releaseRedditCrosspostReservation,
+  reserveRedditPostPublication,
   savePublishedRedditPost,
 } from "../SQL_DB/connectDB.js";
 import { logError } from "../utilis/logError.js";
@@ -82,6 +88,28 @@ function optionalText(details: Record<string, unknown>, key: string): string | u
 }
 
 function parseAction(fields: Record<string, string>): ApprovedAction | null {
+  // Older versions stored reviewed content drafts directly in the stream.
+  // Keep those entries executable during rollout as well.
+  if (fields.event === "reddit_content_draft" && fields.status === "pending") {
+    const draftId = fields.draftId?.trim();
+    const subreddit = fields.subreddit?.trim();
+    const title = fields.title?.trim();
+    const content = fields.content?.trim();
+    if (!draftId || !subreddit || !title || !content) return null;
+    return {
+      actionId: `reddit-draft-${draftId}`,
+      action: "publish_post",
+      details: {
+        draftId,
+        requireOwnerMode: true,
+        deliveryType: "scheduled",
+        subreddit,
+        topic: fields.topic ?? "",
+        title,
+        content,
+      },
+    };
+  }
   if (fields.event !== "reddit_action" || fields.status !== "approved") return null;
   const actions: RedditActionName[] = [
     "publish_post",
@@ -112,13 +140,44 @@ async function executeAction(action: ApprovedAction): Promise<{
   const details = action.details;
   switch (action.action) {
     case "publish_post": {
+      const draftId = optionalText(details, "draftId");
+      const subreddit = requiredText(details, "subreddit");
+      if (details.requireOwnerMode === true && await getRedditManagementMode(subreddit) !== "owner") {
+        if (draftId) await markRedditDraftCancelled(draftId);
+        return {
+          status: "cancelled",
+          result: { draftId, subreddit, reason: "Management mode is no longer owner" },
+        };
+      }
       const post = {
-        subreddit: requiredText(details, "subreddit"),
+        subreddit,
         title: requiredText(details, "title"),
         content: requiredText(details, "content"),
         ...(Array.isArray(details.media) ? { media: details.media as { type: "image" | "video" | null; url: string | null }[] } : {}),
       };
-      const published = await sendToReddit(post);
+      const reservationId = draftId ?? action.actionId;
+      const slot = await reserveRedditPostPublication(reservationId, subreddit);
+      if (slot.status === "daily_limit") {
+        if (draftId) await markRedditDraftPending(draftId);
+        return {
+          status: "cancelled",
+          result: { draftId, subreddit, reason: "Two Reddit posts have already been published or reserved in this subreddit in the last 24 hours" },
+        };
+      }
+      const published = slot.status === "published"
+        ? { postId: slot.postId, url: slot.url }
+        : await sendToReddit({
+            ...post,
+            idempotencyKey: `sageposter-post-${reservationId}`,
+          });
+      if (slot.status === "reserved") {
+        await completeRedditPostPublication({
+          actionId: reservationId,
+          subreddit,
+          postId: published.postId,
+          url: published.url,
+        });
+      }
       const topic = optionalText(details, "topic");
       if (topic) {
         try {
@@ -133,6 +192,17 @@ async function executeAction(action: ApprovedAction): Promise<{
         } catch (error) {
           logError("Reddit post published but history save failed", error, {
             actionId: action.actionId,
+            postId: published.postId,
+          });
+        }
+      }
+      if (draftId) {
+        try {
+          await markRedditDraftPublished(draftId, published.postId);
+        } catch (error) {
+          logError("Reddit draft published but its database status update failed", error, {
+            actionId: action.actionId,
+            draftId,
             postId: published.postId,
           });
         }
@@ -185,11 +255,35 @@ async function executeAction(action: ApprovedAction): Promise<{
     case "crosspost": {
       const sourcePostId = requiredText(details, "sourcePostId");
       const targetSubreddit = requiredText(details, "targetSubreddit");
-      const published = await publishRedditCrosspost({
-        sourcePostId,
-        targetSubreddit,
-        title: optionalText(details, "title") ?? null,
-      });
+      const slot = await reserveRedditPostPublication(action.actionId, targetSubreddit);
+      if (slot.status === "daily_limit") {
+        await releaseRedditCrosspostReservation({ sourcePostId, targetSubreddit });
+        return {
+          status: "cancelled",
+          result: { sourcePostId, targetSubreddit, reason: "Two Reddit posts have already been published or reserved in this subreddit in the last 24 hours" },
+        };
+      }
+      const published = slot.status === "published"
+        ? {
+            crosspostId: slot.postId,
+            targetSubreddit,
+            url: slot.url,
+            permalink: slot.url,
+          }
+        : await publishRedditCrosspost({
+            sourcePostId,
+            targetSubreddit,
+            title: optionalText(details, "title") ?? null,
+            idempotencyKey: `sageposter-crosspost-${action.actionId}`,
+          });
+      if (slot.status === "reserved") {
+        await completeRedditPostPublication({
+          actionId: action.actionId,
+          subreddit: published.targetSubreddit,
+          postId: published.crosspostId,
+          url: published.url,
+        });
+      }
       const completed = await completeRedditCrosspost({
         sourcePostId,
         targetSubreddit: published.targetSubreddit,
@@ -233,7 +327,8 @@ async function executeStreamMessage(message: StreamMessage, acknowledgeGroup?: s
     if (acknowledgeGroup) await redis.xack(streamName, acknowledgeGroup, message.id);
     return;
   }
-  const lockKey = `sageposter:reddit:action-lock:${action.actionId}`;
+  const executionKey = optionalText(action.details, "draftId") ?? action.actionId;
+  const lockKey = `sageposter:reddit:action-lock:${executionKey}`;
   const locked = await redis.set(lockKey, consumerName, "NX", "EX", 1_800);
   if (locked !== "OK") throw new Error(`Reddit action ${action.actionId} is already being executed`);
   try {

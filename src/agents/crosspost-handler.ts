@@ -1,11 +1,12 @@
 import os from "node:os";
+import { createHash } from "node:crypto";
 import { Redis } from "ioredis";
 import { AIanswer } from "../AI.js";
 import {
   checkRedditCrosspost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
 import {
-  hasRedditCrosspost,
+  releaseRedditCrosspostReservation,
   reserveRedditCrosspost,
 } from "../SQL_DB/connectDB.js";
 import { logError } from "../utilis/logError.js";
@@ -33,6 +34,13 @@ type Candidate = {
   url: string;
   topic: string;
 };
+
+class RedditCrosspostDailyLimitError extends Error {
+  constructor() {
+    super("The rolling 24-hour Reddit crosspost limit has been reached");
+    this.name = "RedditCrosspostDailyLimitError";
+  }
+}
 
 redis.on("error", (error) => {
   logError("Crosspost handler Redis error", error, { streamName, groupName });
@@ -86,8 +94,6 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
     console.info("[Crosspost handler] Skipping same-subreddit target", { streamId });
     return;
   }
-  if (await hasRedditCrosspost(candidate.sourcePostId, candidate.targetSubreddit)) return;
-
   const request = {
     sourcePostId: candidate.sourcePostId,
     targetSubreddit: candidate.targetSubreddit,
@@ -121,21 +127,42 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
     return;
   }
 
-  const reserved = await reserveRedditCrosspost({
+  const reservation = await reserveRedditCrosspost({
     sourcePostId: candidate.sourcePostId,
     targetSubreddit: checked.targetSubreddit,
   });
-  if (!reserved) return;
-  const action = await enqueueApprovedRedditAction({
-    action: "crosspost",
-    details: {
+  if (reservation === "duplicate") return;
+  if (reservation === "daily_limit") throw new RedditCrosspostDailyLimitError();
+
+  const actionId = `reddit-crosspost-${createHash("sha256")
+    .update(`${candidate.sourcePostId}\0${checked.targetSubreddit.toLowerCase()}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+  let action: Awaited<ReturnType<typeof enqueueApprovedRedditAction>>;
+  try {
+    action = await enqueueApprovedRedditAction({
+      action: "crosspost",
+      actionId,
+      details: {
+        sourcePostId: candidate.sourcePostId,
+        targetSubreddit: checked.targetSubreddit,
+        title: request.title ?? checked.sourcePost.title,
+        content: checked.sourcePost.body?.trim() || checked.sourcePost.title,
+        topic: candidate.topic,
+      },
+    });
+  } catch (error) {
+    await releaseRedditCrosspostReservation({
       sourcePostId: candidate.sourcePostId,
       targetSubreddit: checked.targetSubreddit,
-      title: request.title ?? checked.sourcePost.title,
-      content: checked.sourcePost.body?.trim() || checked.sourcePost.title,
-      topic: candidate.topic,
-    },
-  });
+    }).catch((releaseError) => {
+      logError("Could not release crosspost reservation after action enqueue failure", releaseError, {
+        sourcePostId: candidate.sourcePostId,
+        targetSubreddit: checked.targetSubreddit,
+      });
+    });
+    throw error;
+  }
   console.info("[Crosspost handler] Approved crosspost action queued", {
     streamId,
     actionId: action.actionId,
@@ -173,6 +200,7 @@ export async function runRedditCrosspostHandlerBatch(limit = 20): Promise<number
   }
   const count = Math.max(1, Math.min(20, Math.floor(limit)));
   let processed = 0;
+  let dailyLimitReached = false;
   while (true) {
     const claimed = await redis.call(
       "XAUTOCLAIM", streamName, groupName, consumerName, "60000", "0-0", "COUNT", count,
@@ -194,12 +222,18 @@ export async function runRedditCrosspostHandlerBatch(limit = 20): Promise<number
         processed += 1;
         batchProcessed += 1;
       } catch (error) {
+        if (error instanceof RedditCrosspostDailyLimitError) {
+          dailyLimitReached = true;
+          console.info("[Crosspost handler] Daily crosspost cap reached; remaining candidates stay pending");
+          break;
+        }
         logError("Crosspost candidate left pending for retry", error, {
           streamId: message.id,
           event: message.fields.event,
         });
       }
     }
+    if (dailyLimitReached) break;
     // Failed entries stay pending; avoid reclaiming them repeatedly in this run.
     if (batchProcessed === 0) break;
   }

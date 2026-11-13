@@ -284,6 +284,7 @@ export type RedditCrosspostRequest = {
   sourcePostId: string;
   targetSubreddit: string;
   title: string | null;
+  idempotencyKey?: string;
 };
 
 export type ScheduledRedditPostCandidate = {

@@ -104,8 +104,26 @@ async function ensurePublishedPostsTable(): Promise<void> {
         status TEXT NOT NULL DEFAULT 'pending',
         content_fingerprint TEXT NOT NULL,
         redis_stream_id TEXT,
+        reddit_post_id TEXT,
+        published_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (subreddit, content_fingerprint)
+      )
+    `);
+    await pool.query(`
+      ALTER TABLE reddit_agent_drafts
+      ADD COLUMN IF NOT EXISTS reddit_post_id TEXT,
+      ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reddit_post_publication_slots (
+        action_id TEXT PRIMARY KEY,
+        subreddit TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing',
+        reddit_post_id TEXT,
+        url TEXT,
+        reserved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        published_at TIMESTAMPTZ
       )
     `);
     await pool.query(`
@@ -200,19 +218,75 @@ export async function hasRedditCrosspost(
   return result && result?.rowCount ? result?.rowCount > 0 : false;
 }
 
+export type RedditCrosspostReservation = "reserved" | "duplicate" | "daily_limit";
+
 export async function reserveRedditCrosspost(input: {
   sourcePostId: string;
   targetSubreddit: string;
-}): Promise<boolean> {
+}): Promise<RedditCrosspostReservation> {
   await ensurePublishedPostsTable();
-  const result = await pool.query(
-    `INSERT INTO reddit_crosspost_history
-       (source_post_id, target_subreddit)
-     VALUES ($1, $2)
-     ON CONFLICT (source_post_id, target_subreddit) DO NOTHING`,
-    [input.sourcePostId, input.targetSubreddit],
+  const client = await pool.connect();
+  const sourcePostId = input.sourcePostId.trim();
+  const targetSubreddit = input.targetSubreddit.trim().replace(/^r\//i, "").toLowerCase();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      "sageposter:reddit-crosspost-daily-limit",
+    ]);
+
+    const existing = await client.query<{ status: string }>(
+      `SELECT status FROM reddit_crosspost_history
+       WHERE source_post_id = $1 AND LOWER(target_subreddit) = $2 LIMIT 1`,
+      [sourcePostId, targetSubreddit],
+    );
+    if (existing.rows[0]?.status === "published") {
+      await client.query("COMMIT");
+      return "duplicate";
+    }
+    if (existing.rows[0]?.status === "processing") {
+      // Re-enqueueing uses a deterministic action ID, so this recovers a crash
+      // between reserving the pair and placing its action in Redis.
+      await client.query("COMMIT");
+      return "reserved";
+    }
+
+    const recent = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM reddit_crosspost_history
+       WHERE status IN ('processing', 'published')
+         AND published_at >= NOW() - INTERVAL '24 hours'`,
+    );
+    if (Number(recent.rows[0]?.count ?? 0) >= 2) {
+      await client.query("COMMIT");
+      return "daily_limit";
+    }
+
+    await client.query(
+      `INSERT INTO reddit_crosspost_history (source_post_id, target_subreddit)
+       VALUES ($1, $2)`,
+      [sourcePostId, targetSubreddit],
+    );
+    await client.query("COMMIT");
+    return "reserved";
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function releaseRedditCrosspostReservation(input: {
+  sourcePostId: string;
+  targetSubreddit: string;
+}): Promise<void> {
+  await ensurePublishedPostsTable();
+  await pool.query(
+    `DELETE FROM reddit_crosspost_history
+     WHERE source_post_id = $1 AND LOWER(target_subreddit) = LOWER($2)
+       AND status = 'processing'`,
+    [input.sourcePostId.trim(), input.targetSubreddit.trim().replace(/^r\//i, "")],
   );
-  return (result.rowCount ?? 0) > 0;
 }
 
 export async function completeRedditCrosspost(input: {
@@ -226,7 +300,7 @@ export async function completeRedditCrosspost(input: {
     `UPDATE reddit_crosspost_history
      SET status = 'published', crosspost_id = $3, url = $4, published_at = NOW()
      WHERE source_post_id = $1 AND LOWER(target_subreddit) = LOWER($2)
-       AND status = 'processing'`,
+       AND (status = 'processing' OR (status = 'published' AND crosspost_id = $3))`,
     [input.sourcePostId, input.targetSubreddit, input.crosspostId, input.url],
   );
   return (result.rowCount ?? 0) > 0;
@@ -396,11 +470,172 @@ export async function setRedditDraftStreamId(
   await ensurePublishedPostsTable();
   const result = await pool.query(
     `UPDATE reddit_agent_drafts
-     SET redis_stream_id = $2
+     SET redis_stream_id = $2, status = 'publishing'
      WHERE draft_id = $1 AND status = 'pending'`,
     [draftId, streamId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function getPendingRedditDrafts(
+  subreddit: string,
+  limit = 20,
+): Promise<PendingRedditDraftInput[]> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query<PendingRedditDraftInput>(
+    `SELECT draft_id AS "draftId", subreddit, topic, title, content
+     FROM reddit_agent_drafts
+     WHERE status = 'pending' AND LOWER(subreddit) = LOWER($1)
+     ORDER BY created_at ASC LIMIT $2`,
+    [subreddit.trim().replace(/^r\//i, ""), Math.max(1, Math.min(100, Math.floor(limit)))],
+  );
+  return result.rows;
+}
+
+export async function markRedditDraftPublished(
+  draftId: string,
+  redditPostId: string,
+): Promise<void> {
+  await ensurePublishedPostsTable();
+  await pool.query(
+    `UPDATE reddit_agent_drafts
+     SET status = 'published', reddit_post_id = $2, published_at = NOW()
+     WHERE draft_id = $1 AND status IN ('pending', 'publishing')`,
+    [draftId, redditPostId],
+  );
+}
+
+export async function markRedditDraftCancelled(draftId: string): Promise<void> {
+  await ensurePublishedPostsTable();
+  await pool.query(
+    `UPDATE reddit_agent_drafts SET status = 'cancelled'
+     WHERE draft_id = $1 AND status IN ('pending', 'publishing')`,
+    [draftId],
+  );
+}
+
+export async function markRedditDraftPending(draftId: string): Promise<void> {
+  await ensurePublishedPostsTable();
+  await pool.query(
+    `UPDATE reddit_agent_drafts
+     SET status = 'pending', redis_stream_id = NULL
+     WHERE draft_id = $1 AND status = 'publishing'`,
+    [draftId],
+  );
+}
+
+export type RedditPostPublicationReservation =
+  | { status: "reserved" }
+  | { status: "published"; postId: string; url: string }
+  | { status: "daily_limit" };
+
+/** Atomically reserve one of two per-subreddit Reddit publication slots per rolling 24h. */
+export async function reserveRedditPostPublication(
+  actionId: string,
+  subredditInput: string,
+): Promise<RedditPostPublicationReservation> {
+  await ensurePublishedPostsTable();
+  const actionKey = actionId.trim();
+  const subreddit = subredditInput.trim().replace(/^r\//i, "").toLowerCase();
+  if (!actionKey || !subreddit) throw new Error("An action ID and subreddit are required to reserve a Reddit post slot");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `reddit-post-publication:${subreddit}`,
+    ]);
+
+    const existing = await client.query<{
+      status: string;
+      reddit_post_id: string | null;
+      url: string | null;
+      reserved_at: Date;
+    }>(
+      `SELECT status, reddit_post_id, url, reserved_at
+       FROM reddit_post_publication_slots WHERE action_id = $1`,
+      [actionKey],
+    );
+    const existingSlot = existing.rows[0];
+    if (existingSlot?.status === "published" && existingSlot.reddit_post_id && existingSlot.url) {
+      await client.query("COMMIT");
+      return { status: "published", postId: existingSlot.reddit_post_id, url: existingSlot.url };
+    }
+    if (existingSlot?.status === "processing" &&
+        existingSlot.reserved_at.getTime() >= Date.now() - 24 * 60 * 60 * 1000) {
+      await client.query("COMMIT");
+      return { status: "reserved" };
+    }
+
+    const recent = await client.query<{ count: string }>(
+      `SELECT (
+         SELECT COUNT(*) FROM reddit_post_publication_slots s
+         WHERE LOWER(s.subreddit) = $1
+           AND s.status IN ('processing', 'published')
+           AND s.reserved_at >= NOW() - INTERVAL '24 hours'
+       ) + (
+         SELECT COUNT(*) FROM published_reddit_posts p
+         WHERE LOWER(REGEXP_REPLACE(p.subreddit, '^r/', '', 'i')) = $1
+           AND p.published_at >= NOW() - INTERVAL '24 hours'
+           AND NOT EXISTS (
+             SELECT 1 FROM reddit_post_publication_slots s
+             WHERE s.reddit_post_id = p.reddit_post_id
+           )
+       ) AS count`,
+      [subreddit],
+    );
+    if (Number(recent.rows[0]?.count ?? 0) >= 2) {
+      if (existingSlot?.status === "processing") {
+        await client.query(
+          "DELETE FROM reddit_post_publication_slots WHERE action_id = $1 AND status = 'processing'",
+          [actionKey],
+        );
+      }
+      await client.query("COMMIT");
+      return { status: "daily_limit" };
+    }
+
+    if (existingSlot?.status === "processing") {
+      await client.query(
+        `UPDATE reddit_post_publication_slots
+         SET reserved_at = NOW(), subreddit = $2
+         WHERE action_id = $1 AND status = 'processing'`,
+        [actionKey, subreddit],
+      );
+    } else {
+      await client.query(
+        `INSERT INTO reddit_post_publication_slots (action_id, subreddit, status)
+         VALUES ($1, $2, 'processing')`,
+        [actionKey, subreddit],
+      );
+    }
+    await client.query("COMMIT");
+    return { status: "reserved" };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function completeRedditPostPublication(input: {
+  actionId: string;
+  subreddit: string;
+  postId: string;
+  url: string;
+}): Promise<void> {
+  await ensurePublishedPostsTable();
+  const result = await pool.query(
+    `UPDATE reddit_post_publication_slots
+     SET status = 'published', reddit_post_id = $3, url = $4, published_at = NOW()
+     WHERE action_id = $1 AND LOWER(subreddit) = LOWER($2)
+       AND status IN ('processing', 'published')`,
+    [input.actionId.trim(), input.subreddit.trim().replace(/^r\//i, ""), input.postId, input.url],
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new Error(`Could not mark Reddit post slot published for action ${input.actionId}`);
+  }
 }
 
 export async function claimRedditEngagementComment(

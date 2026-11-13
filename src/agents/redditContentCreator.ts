@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { AIanswer } from "../AI.js";
 import {
+  getPendingRedditDrafts,
   getLatestRedditContentHistory,
   savePendingRedditDraftIfUnique,
   setRedditDraftStreamId,
   type PendingRedditDraftInput,
 } from "../SQL_DB/connectDB.js";
-import { enqueuePendingRedditDraft } from "../caching_redis/redditAgentStream.js";
+import { enqueueApprovedRedditAction } from "../caching_redis/redditAgentStream.js";
 import { logError } from "../utilis/logError.js";
 import {
   loadRedditCommunityContext,
@@ -25,7 +26,7 @@ export type PendingRedditDraftResult = {
   topic: string;
   title: string;
   content: string;
-  status: "pending";
+  status: "publishing";
   streamId: string | null;
 };
 
@@ -58,12 +59,60 @@ function validateGeneratedDraft(value: unknown): GeneratedRedditDraft {
   return { topic, title, content };
 }
 
-/** Generate and persist a draft for review. This function never publishes. */
+async function queueDraftForPublishing(draft: PendingRedditDraftInput): Promise<string> {
+  const queued = await enqueueApprovedRedditAction({
+    action: "publish_post",
+    actionId: `reddit-draft-${draft.draftId}-${randomUUID()}`,
+    details: {
+      draftId: draft.draftId,
+      requireOwnerMode: true,
+      deliveryType: "scheduled",
+      subreddit: draft.subreddit,
+      topic: draft.topic,
+      title: draft.title,
+      content: draft.content,
+    },
+  });
+  try {
+    const linked = await setRedditDraftStreamId(draft.draftId, queued.streamId);
+    if (!linked) {
+      logError("Reddit draft was queued but its publishing status could not be updated", new Error("Draft is no longer pending"), {
+        draftId: draft.draftId,
+        streamId: queued.streamId,
+      });
+    }
+  } catch (error) {
+    logError("Reddit draft was queued but its stream reference could not be saved", error, {
+      draftId: draft.draftId,
+      streamId: queued.streamId,
+    });
+  }
+  return queued.streamId;
+}
+
+/** Queue saved, community-reviewed drafts for the non-AI action executor. */
+async function queueExistingPendingDrafts(
+  subreddit: string,
+): Promise<PendingRedditDraftResult | null> {
+  const pendingDrafts = await getPendingRedditDrafts(subreddit, 1);
+  let recoveredDraft: PendingRedditDraftResult | null = null;
+  for (const draft of pendingDrafts) {
+    const streamId = await queueDraftForPublishing(draft);
+    recoveredDraft ??= { ...draft, status: "publishing", streamId };
+  }
+  return recoveredDraft;
+}
+
+/** Generate a community-reviewed draft and queue its publication action. */
 export async function createPendingRedditContentDraft(
   subredditInput: string,
 ): Promise<PendingRedditDraftResult> {
   const subreddit = subredditInput.trim().replace(/^r\//i, "");
   if (!subreddit) throw new Error("A subreddit is required to create a Reddit draft");
+
+  // Recover drafts left pending by a previous Redis outage before generating more.
+  const recoveredDraft = await queueExistingPendingDrafts(subreddit);
+  if (recoveredDraft) return recoveredDraft;
 
   const history = await getLatestRedditContentHistory(subreddit, 20);
   const community = await loadRedditCommunityContext(subreddit);
@@ -116,38 +165,23 @@ export async function createPendingRedditContentDraft(
       );
     }
 
-    const createdAt = new Date().toISOString();
     let streamId: string;
     try {
-      streamId = await enqueuePendingRedditDraft(draft, createdAt);
+      streamId = await queueDraftForPublishing(draft);
     } catch (error) {
-      logError("Pending Reddit draft Redis Stream enqueue failed", error, {
+      logError("Reddit draft publish action enqueue failed", error, {
         draftId: draft.draftId,
         subreddit,
       });
       throw new RedditDraftStreamEnqueueError(draft.draftId, error);
     }
-    try {
-      const linked = await setRedditDraftStreamId(draft.draftId, streamId);
-      if (!linked) {
-        throw new Error("Could not link the Redis Stream entry to its database draft");
-      }
-    } catch (error) {
-      // Both pending records already exist; the draft ID remains in the stream
-      // so a later consumer can still find its database row.
-      logError("Could not save Reddit draft Redis Stream reference", error, {
-        draftId: draft.draftId,
-        streamId,
-      });
-    }
-
     return {
       draftId: draft.draftId,
       subreddit,
       topic: draft.topic,
       title: draft.title,
       content: draft.content,
-      status: "pending",
+      status: "publishing",
       streamId,
     };
   }

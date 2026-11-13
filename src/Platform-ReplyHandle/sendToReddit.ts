@@ -234,6 +234,7 @@ export async function sendToReddit(post: {
   subreddit: string;
   title: string;
   content: string;
+  idempotencyKey?: string;
   media?: { type: "image" | "video" | null; url: string | null }[];
 }): Promise<{ postId: string; url: string }> {
   const subreddit = post.subreddit?.trim().replace(/^r\//i, "");
@@ -247,6 +248,7 @@ export async function sendToReddit(post: {
     subreddit,
     title,
     body,
+    ...(post.idempotencyKey ? { idempotencyKey: post.idempotencyKey } : {}),
     ...(post.media?.length
       ? {
           media: post.media.filter(
@@ -327,6 +329,7 @@ export async function publishRedditCrosspost(
     sourcePostId: requestBody.sourcePostId,
     targetSubreddit: requestBody.targetSubreddit,
     ...(requestBody.title ? { title: requestBody.title } : {}),
+    ...(requestBody.idempotencyKey ? { idempotencyKey: requestBody.idempotencyKey } : {}),
   });
   if (!result.ok || !result.crosspostId || !result.targetSubreddit || !result.url || !result.permalink) {
     throw new Error("Reddit service did not return complete crosspost details");
