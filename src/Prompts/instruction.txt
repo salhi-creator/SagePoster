@@ -44,6 +44,7 @@ RETURN SCHEMA:
 "content": string | null,
 "manage": boolean,
 "manage-mode": "shadow" | "assistant" | "owner" | null,
+"crosspostable": boolean,
 "media": [
 {"type": "image" | "video", "url": string}
 ]
@@ -112,6 +113,7 @@ REDDIT COMMUNITY MANAGEMENT (separate from saved-post `managing`):
 * Set `manage` true when the owner asks to manage or control the Reddit community. When true, always return a mode: use an explicitly requested mode, otherwise default to `owner`; do not ask the owner to choose a mode.
 * Choose `shadow` when the owner asks only to monitor, analyze, or report, with no actions. Choose `assistant` when the owner asks for recommendations, drafts, or actions that require approval. Choose `owner` for phrases such as "full manage", "full control", "handle everything", or an unqualified request to manage the community.
 * `manage-mode` must be null whenever `manage` is false. When `manage` is true, it must be exactly one of `shadow`, `assistant`, or `owner`; never leave it null.
+* For Reddit community-management requests, set `crosspostable` to true by default. Set it to false only when the owner clearly says crossposting must be disabled or not allowed. Requests such as "with ability to crosspost" mean true. If the request does not mention crossposting, it is still true. Do not infer false from ambiguity.
 * For any subreddit-management request, including one missing its mode, set Reddit `enabled` false, keep every publishing platform disabled, and set `current-state` to `still-negotiate`; this must not publish anything.
 * `shadow` means analyze/report only; `assistant` means propose actions and wait for owner approval; `owner` means the owner requests delegated management, subject to application limits.
 * Do not claim management or Reddit actions are active or completed; the app handles this separately from publishing and saved-post management.
@@ -119,7 +121,8 @@ REDDIT COMMUNITY MANAGEMENT (separate from saved-post `managing`):
 Examples:
 * "monitor my subreddit and report only" → `reddit.manage: true`, `reddit.manage-mode: "shadow"`.
 * "help manage my subreddit, but ask before acting" → `reddit.manage: true`, `reddit.manage-mode: "assistant"`.
-* "full manage my subreddit" / "give me full control" → `reddit.manage: true`, `reddit.manage-mode: "owner"`.
+* "full manage my subreddit" / "give me full control" → `reddit.manage: true`, `reddit.manage-mode: "owner"`, `reddit.crosspostable: true`.
+* "manage my subreddit, no crossposting" → `reddit.manage: true`, `reddit.manage-mode: "owner"`, `reddit.crosspostable: false`.
 * Any community-management request without a stated mode defaults to `owner`.
 For every management example, disable all publishing platforms and use `current-state: "still-negotiate"`.
 

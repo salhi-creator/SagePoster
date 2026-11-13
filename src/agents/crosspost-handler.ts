@@ -10,7 +10,10 @@ import {
   reserveRedditCrosspost,
 } from "../SQL_DB/connectDB.js";
 import { logError } from "../utilis/logError.js";
-import { enqueueApprovedRedditAction } from "../caching_redis/redditAgentStream.js";
+import {
+  enqueueApprovedRedditAction,
+  isRedditCrosspostingEnabled,
+} from "../caching_redis/redditAgentStream.js";
 import { scanScheduledRedditPosts } from "../queues/redditCrosspostWorker.js";
 
 const connection = {
@@ -90,6 +93,13 @@ function parseCandidate(fields: Record<string, string>): Candidate | null {
 }
 
 async function crosspostApprovedPost(candidate: Candidate, streamId: string): Promise<void> {
+  if (!(await isRedditCrosspostingEnabled(candidate.sourceSubreddit))) {
+    console.info("[Crosspost handler] Source subreddit has crossposting disabled", {
+      streamId,
+      sourceSubreddit: candidate.sourceSubreddit,
+    });
+    return;
+  }
   if (candidate.sourceSubreddit.toLowerCase() === candidate.targetSubreddit.toLowerCase()) {
     console.info("[Crosspost handler] Skipping same-subreddit target", { streamId });
     return;
@@ -145,6 +155,7 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
       actionId,
       details: {
         sourcePostId: candidate.sourcePostId,
+        sourceSubreddit: candidate.sourceSubreddit,
         targetSubreddit: checked.targetSubreddit,
         title: request.title ?? checked.sourcePost.title,
         content: checked.sourcePost.body?.trim() || checked.sourcePost.title,
@@ -192,6 +203,22 @@ async function handleMessage(message: StreamMessage): Promise<void> {
 }
 
 export async function runRedditCrosspostHandlerBatch(limit = 20): Promise<number> {
+  const managedSubreddits = [...new Set(
+    (process.env.REDDIT_OWNED_SUBREDDITS ?? "SageFrontier")
+      .split(",")
+      .map((value) => value.trim().replace(/^r\//i, ""))
+      .filter(Boolean),
+  )];
+  const enabledSubreddits = (await Promise.all(
+    managedSubreddits.map(async (subreddit) =>
+      (await isRedditCrosspostingEnabled(subreddit)) ? subreddit : null,
+    ),
+  )).filter((subreddit): subreddit is string => subreddit !== null);
+  if (!enabledSubreddits.length) {
+    console.info("[Crosspost handler] Skipped: no owner-managed subreddit allows crossposting");
+    return 0;
+  }
+
   await scanScheduledRedditPosts();
   try {
     await redis.xgroup("CREATE", streamName, groupName, "0", "MKSTREAM");

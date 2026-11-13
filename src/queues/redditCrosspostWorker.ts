@@ -2,7 +2,10 @@ import {
   getScheduledRedditCrosspostCandidates,
   hasRedditCrosspost,
 } from "../SQL_DB/connectDB.js";
-import { enqueueApprovedRedditCrosspost } from "../caching_redis/redditAgentStream.js";
+import {
+  enqueueApprovedRedditCrosspost,
+  isRedditCrosspostingEnabled,
+} from "../caching_redis/redditAgentStream.js";
 import { getRedditCrosspostTargets } from "./redditCrosspostQueue.js";
 
 /** Called by the scheduled crosspost-handler BullMQ job. */
@@ -14,8 +17,14 @@ export async function scanScheduledRedditPosts(): Promise<number> {
   }
 
   const candidates = await getScheduledRedditCrosspostCandidates(targets);
-  let enqueued = 0;
+  const eligibleCandidates: typeof candidates = [];
   for (const candidate of candidates) {
+    if (await isRedditCrosspostingEnabled(candidate.sourceSubreddit)) {
+      eligibleCandidates.push(candidate);
+    }
+  }
+  let enqueued = 0;
+  for (const candidate of eligibleCandidates) {
     for (const targetSubreddit of targets) {
       if (targetSubreddit.toLowerCase() === candidate.sourceSubreddit.toLowerCase()) continue;
       if (await hasRedditCrosspost(candidate.sourcePostId, targetSubreddit)) continue;
@@ -24,7 +33,7 @@ export async function scanScheduledRedditPosts(): Promise<number> {
     }
   }
   console.info("[Reddit crosspost scan] Finished", {
-    candidates: candidates.length,
+    candidates: eligibleCandidates.length,
     approvedStreamEvents: enqueued,
     targets: targets.length,
   });

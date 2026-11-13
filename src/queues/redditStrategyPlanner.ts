@@ -1,6 +1,10 @@
 import { Job, Worker } from "bullmq";
 import { AIanswer } from "../AI.js";
-import { getRedditManagementMode, getRecentRedditStreamEvents } from "../caching_redis/redditAgentStream.js";
+import {
+  getRedditManagementCrosspostable,
+  getRedditManagementMode,
+  getRecentRedditStreamEvents,
+} from "../caching_redis/redditAgentStream.js";
 import { runRedditActionExecutorBatch } from "../agents/redditActionExecutor.js";
 import { runRedditCrosspostHandlerBatch } from "../agents/crosspost-handler.js";
 import { runRedditActivityAgentBatch } from "../agents/redditEngagementConsumer.js";
@@ -67,14 +71,32 @@ function parseIntervals(value: unknown): { intervals: Record<RedditAgentName, nu
 async function scheduleAgentsFromStream(): Promise<void> {
   const activeSubreddits = await ownerManagedSubreddits();
   if (!activeSubreddits.length) {
-    console.info("[Reddit strategy planner] No owner-managed subreddits; agent schedules left unchanged");
+    await Promise.all(REDDIT_AGENT_NAMES.map((agent) =>
+      redditAgentQueue.removeJobScheduler(`reddit-agent-${agent}`),
+    ));
+    console.info("[Reddit strategy planner] No owner-managed subreddits; agent schedules removed");
     return;
+  }
+
+  const crosspostableSubreddits = (await Promise.all(
+    activeSubreddits.map(async (subreddit) => ({
+      subreddit,
+      enabled: await getRedditManagementCrosspostable(subreddit),
+    })),
+  )).filter((item) => item.enabled).map((item) => item.subreddit);
+  const activeAgents = REDDIT_AGENT_NAMES.filter(
+    (agent) => agent !== "crosspost_handler" || crosspostableSubreddits.length > 0,
+  );
+  if (!crosspostableSubreddits.length) {
+    await redditAgentQueue.removeJobScheduler("reddit-agent-crosspost_handler");
   }
 
   const recentEvents = await getRecentRedditStreamEvents(50);
   const result = await AIanswer(
     JSON.stringify({
       managedSubreddits: activeSubreddits,
+      crosspostableSubreddits,
+      activeAgents,
       recentEvents,
       intervalConstraintsHours: {
         min: 1,
@@ -87,7 +109,7 @@ async function scheduleAgentsFromStream(): Promise<void> {
   );
   const plan = parseIntervals(result);
 
-  for (const agent of REDDIT_AGENT_NAMES) {
+  for (const agent of activeAgents) {
     // Two crosspost scans per rolling day, at most; the DB reservation also
     // enforces a hard cap of two actual crossposts in any 24-hour window.
     const intervalHours = plan.intervals[agent];
@@ -137,6 +159,14 @@ async function runAgent(agent: RedditAgentName): Promise<void> {
       await runRedditActivityAgentBatch("engagement", 20);
       return;
     case "crosspost_handler":
+      if (!(await Promise.all(
+        subreddits.map((subreddit) => getRedditManagementCrosspostable(subreddit)),
+      )).some(Boolean)) {
+        console.info("[Reddit agent job] Crosspost handler skipped because crossposting is disabled", {
+          subreddits,
+        });
+        return;
+      }
       await runRedditCrosspostHandlerBatch(20);
       return;
     case "action_executor":

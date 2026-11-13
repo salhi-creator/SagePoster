@@ -41,12 +41,21 @@ function managementModeKey(subreddit: string): string {
   return `sageposter:reddit:management-mode:${name}`;
 }
 
-export async function setRedditManagementMode(
+function managementCrosspostableKey(subreddit: string): string {
+  const name = subreddit.trim().replace(/^r\//i, "").toLowerCase();
+  return `sageposter:reddit:management-crosspostable:${name}`;
+}
+
+export async function setRedditManagementConfig(
   subreddit: string,
   mode: "shadow" | "assistant" | "owner",
+  crosspostable: boolean,
 ): Promise<void> {
-  if (!subreddit.trim()) throw new Error("Subreddit is required to set Reddit management mode");
-  await redis.set(managementModeKey(subreddit), mode);
+  if (!subreddit.trim()) throw new Error("Subreddit is required to set Reddit management config");
+  await redis.multi()
+    .set(managementModeKey(subreddit), mode)
+    .set(managementCrosspostableKey(subreddit), String(crosspostable))
+    .exec();
 }
 
 export async function getRedditManagementMode(
@@ -55,6 +64,17 @@ export async function getRedditManagementMode(
   if (!subreddit.trim()) return null;
   const mode = await redis.get(managementModeKey(subreddit));
   return mode === "shadow" || mode === "assistant" || mode === "owner" ? mode : null;
+}
+
+/** Crossposting defaults to enabled for existing and newly managed subreddits. */
+export async function getRedditManagementCrosspostable(subreddit: string): Promise<boolean> {
+  if (!subreddit.trim()) return true;
+  return (await redis.get(managementCrosspostableKey(subreddit))) !== "false";
+}
+
+export async function isRedditCrosspostingEnabled(subreddit: string): Promise<boolean> {
+  if (await getRedditManagementMode(subreddit) !== "owner") return false;
+  return getRedditManagementCrosspostable(subreddit);
 }
 
 redis.on("error", (error) => {

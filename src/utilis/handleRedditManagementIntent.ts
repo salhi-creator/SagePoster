@@ -5,7 +5,7 @@ import {
   RedditDraftStreamEnqueueError,
 } from "../agents/redditContentCreator.js";
 import { logError } from "./logError.js";
-import { setRedditManagementMode } from "../caching_redis/redditAgentStream.js";
+import { setRedditManagementConfig } from "../caching_redis/redditAgentStream.js";
 import { ensureRedditStrategyPlanner } from "../queues/redditStrategyPlanner.js";
 
 const REDDIT_MANAGEMENT_MODES: RedditManagementMode[] = [
@@ -40,15 +40,19 @@ export async function handleRedditManagementIntent(
       : isRedditManagementMode(requestedMode)
         ? requestedMode
         : null;
+  // Be permissive by default; the prompt returns false only for an explicit opt-out.
+  const crosspostable = reddit.crosspostable !== false;
   const message = mode === "owner"
-    ? "Reddit community management is enabled in owner mode. The strategy planner is scheduling the available agents."
+    ? `Reddit community management is enabled in owner mode. Crossposting is ${crosspostable ? "enabled" : "disabled"}; the strategy planner will ${crosspostable ? "schedule" : "not schedule"} the crosspost agent.`
     : mode
       ? `Reddit ${mode} mode is saved. Scheduled autonomous agents currently run in owner mode only.`
     : "I couldn't identify a valid Reddit management mode. Please ask for shadow (analysis only), assistant (approval required), or owner (full control).";
 
   if (mode) {
-    await setRedditManagementMode(reddit.subreddit, mode);
-    if (mode === "owner") await ensureRedditStrategyPlanner();
+    await setRedditManagementConfig(reddit.subreddit, mode, crosspostable);
+    // Replan immediately so disabling crossposting (or leaving owner mode)
+    // removes its recurring agent schedule without waiting for the next tick.
+    await ensureRedditStrategyPlanner();
   }
 
   if (mode === "owner") {

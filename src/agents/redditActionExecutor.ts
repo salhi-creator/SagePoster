@@ -24,6 +24,7 @@ import { logError } from "../utilis/logError.js";
 import {
   replaceRedditActionWithResult,
   getRedditManagementMode,
+  isRedditCrosspostingEnabled,
   type RedditActionName,
 } from "../caching_redis/redditAgentStream.js";
 
@@ -254,7 +255,22 @@ async function executeAction(action: ApprovedAction): Promise<{
     }
     case "crosspost": {
       const sourcePostId = requiredText(details, "sourcePostId");
+      const sourceSubreddit = optionalText(details, "sourceSubreddit");
       const targetSubreddit = requiredText(details, "targetSubreddit");
+      if (!sourceSubreddit || !(await isRedditCrosspostingEnabled(sourceSubreddit))) {
+        await releaseRedditCrosspostReservation({ sourcePostId, targetSubreddit });
+        return {
+          status: "cancelled",
+          result: {
+            sourcePostId,
+            sourceSubreddit,
+            targetSubreddit,
+            reason: sourceSubreddit
+              ? "Crossposting is disabled for the source subreddit"
+              : "Source subreddit is missing, so crossposting cannot be authorized",
+          },
+        };
+      }
       const slot = await reserveRedditPostPublication(action.actionId, targetSubreddit);
       if (slot.status === "daily_limit") {
         await releaseRedditCrosspostReservation({ sourcePostId, targetSubreddit });

@@ -75,6 +75,7 @@ export type PostForm = {
       content: string;
       manage: boolean;
       "manage-mode": RedditManagementMode | null;
+      crosspostable: boolean;
       media: {
         type: "image" | "video" | null;
         url: string | null;
