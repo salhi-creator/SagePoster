@@ -411,7 +411,10 @@ export async function claimRedditEngagementComment(
   const result = await pool.query(
     `INSERT INTO reddit_engagement_replies (comment_id, subreddit, status)
      VALUES ($1, $2, 'processing')
-     ON CONFLICT (comment_id) DO NOTHING`,
+     ON CONFLICT (comment_id) DO UPDATE
+       SET status = 'processing', subreddit = EXCLUDED.subreddit, updated_at = NOW()
+       WHERE reddit_engagement_replies.status = 'pending'
+     RETURNING comment_id`,
     [commentId, subreddit],
   );
   return (result.rowCount ?? 0) > 0;
@@ -420,10 +423,21 @@ export async function claimRedditEngagementComment(
 export async function hasRedditEngagementComment(commentId: string): Promise<boolean> {
   await ensurePublishedPostsTable();
   const result = await pool.query(
-    `SELECT 1 FROM reddit_engagement_replies WHERE comment_id = $1 LIMIT 1`,
+    `SELECT 1 FROM reddit_engagement_replies
+     WHERE comment_id = $1 AND status <> 'pending' LIMIT 1`,
     [commentId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export async function releaseRedditEngagementCommentClaim(commentId: string): Promise<void> {
+  await ensurePublishedPostsTable();
+  await pool.query(
+    `UPDATE reddit_engagement_replies
+     SET status = 'pending', updated_at = NOW()
+     WHERE comment_id = $1 AND status = 'processing'`,
+    [commentId],
+  );
 }
 
 export async function finishRedditEngagementComment(input: {

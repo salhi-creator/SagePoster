@@ -6,6 +6,7 @@ import {
 } from "../agents/redditContentCreator.js";
 import { logError } from "./logError.js";
 import { setRedditManagementMode } from "../caching_redis/redditAgentStream.js";
+import { ensureRedditStrategyPlanner } from "../queues/redditStrategyPlanner.js";
 
 const REDDIT_MANAGEMENT_MODES: RedditManagementMode[] = [
   "shadow",
@@ -39,11 +40,16 @@ export async function handleRedditManagementIntent(
       : isRedditManagementMode(requestedMode)
         ? requestedMode
         : null;
-  const message = mode
-    ? `Reddit community management request recognized in ${mode} mode. Management actions are not active yet.`
+  const message = mode === "owner"
+    ? "Reddit community management is enabled in owner mode. The strategy planner is scheduling the available agents."
+    : mode
+      ? `Reddit ${mode} mode is saved. Scheduled autonomous agents currently run in owner mode only.`
     : "I couldn't identify a valid Reddit management mode. Please ask for shadow (analysis only), assistant (approval required), or owner (full control).";
 
-  if (mode) await setRedditManagementMode(reddit.subreddit, mode);
+  if (mode) {
+    await setRedditManagementMode(reddit.subreddit, mode);
+    if (mode === "owner") await ensureRedditStrategyPlanner();
+  }
 
   if (mode === "owner") {
     try {

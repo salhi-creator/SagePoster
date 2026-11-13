@@ -3,9 +3,6 @@ import http from "http";
 import dotenv from "dotenv";
 import { sendToTelegram } from "./Platform-ReplyHandle/sendToTelegram.js";
 import { sendToDiscord } from "./Platform-ReplyHandle/sendToDiscord.js";
-import {
-  sendToReddit,
-} from "./Platform-ReplyHandle/sendToReddit.js";
 import { AIanswer } from "./AI.js";
 import prepareTelegramPost from "./utilis/Telegram/prepareTelegramPost.js";
 import { fileURLToPath } from "url";
@@ -18,19 +15,13 @@ import { setPictureToCloudinary } from "./utilis/setPictureToCloudinary.js";
 import { handleRedditManagementIntent } from "./utilis/handleRedditManagementIntent.js";
 import { receiveRedditEvents } from "./utilis/receiveRedditEvents.js";
 import { schedulePost } from "./queues/postWorker.js";
-import {
-  ensureRedditCrosspostScanner,
-  getRedditCrosspostTargets,
-} from "./queues/redditCrosspostQueue.js";
-import "./queues/redditCrosspostWorker.js";
-import "./agents/redditEngagementConsumer.js";
-import "./agents/crosspost-handler.js";
+import "./queues/redditStrategyPlanner.js";
 import { randomUUID } from "node:crypto";
 import { logError } from "./utilis/logError.js";
+import { enqueueAndWaitRedditAction } from "./caching_redis/redditAgentStream.js";
 import { managePosts } from "./utilis/managePosts.js";
 import {
   savePublishedDiscordPost,
-  savePublishedRedditPost,
   savePublishedTelegramPost,
 } from "./SQL_DB/connectDB.js";
 import type { PostForm } from "./Data-Structure/types.js";
@@ -41,11 +32,6 @@ const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
 
 dotenv.config();
-if (getRedditCrosspostTargets().length > 0) {
-  void ensureRedditCrosspostScanner().catch((error) => {
-    logError("Could not configure Reddit crosspost scanner", error);
-  });
-}
 
 const app = express();
 const port = process.env.PORT || 3500;
@@ -260,23 +246,26 @@ app.post("/webhook", async (req, res) => {
         if (!result.topic?.trim()) {
           throw new Error("A topic is required to save and manage Reddit posts");
         }
-        const published = await sendToReddit(redditPost);
+        const action = await enqueueAndWaitRedditAction({
+          action: "publish_post",
+          details: {
+            ...redditPost,
+            topic: result.topic,
+            deliveryType: "one-time",
+          },
+        });
+        const published = {
+          postId: typeof action.result.postId === "string" ? action.result.postId : "",
+          url: typeof action.result.url === "string" ? action.result.url : "",
+        };
+        if (!published.postId || !published.url) {
+          throw new Error("Reddit action executor returned incomplete post details");
+        }
         console.info("[Webhook] Reddit publish succeeded", {
           requestId,
           redditPostId: published.postId,
           url: published.url,
         });
-        if (result.topic) {
-          try {
-            await savePublishedRedditPost(
-              result.topic,
-              { ...redditPost, redditPostId: published.postId, url: published.url },
-              { deliveryType: "one-time" },
-            );
-          } catch (error) {
-            logError("Reddit history save failed", error, { requestId });
-          }
-        }
       }
 
       if (result.platforms.discord?.enabled) {

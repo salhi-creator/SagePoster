@@ -2,12 +2,11 @@ import { Worker, Job } from "bullmq";
 import { postQueue } from "./postQueue.js";
 
 import { sendToTelegram } from "../Platform-ReplyHandle/sendToTelegram.js";
-import { sendToReddit } from "../Platform-ReplyHandle/sendToReddit.js";
+import { enqueueAndWaitRedditAction } from "../caching_redis/redditAgentStream.js";
 // import { sendToLinkedIn } from "../Platform-ReplyHandle/sendToLinkedIn.js";
 import handleSchedulePost from "../utilis/Telegram/handleSchedulePost.js";
 import handleScheduleDiscord from "../utilis/Discord/handleScheduleDiscord.js";
 import { logError } from "../utilis/logError.js";
-import { savePublishedRedditPost } from "../SQL_DB/connectDB.js";
 import type {
   Deadline,
   Platform,
@@ -15,10 +14,6 @@ import type {
   PostJobData,
 } from "../Data-Structure/types.js";
 import { randomUUID } from "node:crypto";
-import {
-  ensureRedditCrosspostScanner,
-  getRedditCrosspostTargets,
-} from "./redditCrosspostQueue.js";
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: Number(process.env.REDIS_PORT || 6379),
@@ -50,13 +45,6 @@ export async function schedulePost(form: PostForm) {
     repeat === "every-hour" ||
     repeat === "every-day" ||
     repeat === "every-week";
-
-  const hasScheduledRedditPost =
-    form.platforms.reddit?.enabled === true &&
-    (startTime !== -1 || isRecurring);
-  if (hasScheduledRedditPost && getRedditCrosspostTargets().length > 0) {
-    await ensureRedditCrosspostScanner();
-  }
 
   const now = Date.now();
   const runAt = startTime === -1 ? now : Math.max(startTime, now);
@@ -324,23 +312,27 @@ async function handlePostJob(job: Job<PostJobData>) {
     }
     console.log(`[BullMQ] Posting ${postId} to Reddit...`);
     try {
-      const published = await sendToReddit(redditPost);
+      const action = await enqueueAndWaitRedditAction({
+        action: "publish_post",
+        details: {
+          ...redditPost,
+          topic: form.topic,
+          deliveryType: "scheduled",
+          postId,
+        },
+      });
+      const published = {
+        postId: typeof action.result.postId === "string" ? action.result.postId : "",
+        url: typeof action.result.url === "string" ? action.result.url : "",
+      };
+      if (!published.postId || !published.url) {
+        throw new Error("Reddit action executor returned incomplete post details");
+      }
       results.reddit = published;
       console.log(`[BullMQ] Post ${postId} successfully sent to Reddit`, {
         redditPostId: published.postId,
         url: published.url,
       });
-      if (form.topic) {
-        try {
-          await savePublishedRedditPost(
-            form.topic,
-            { ...redditPost, redditPostId: published.postId, url: published.url },
-            { deliveryType: "scheduled", postId },
-          );
-        } catch (error) {
-          logError("Reddit history save failed", error, { postId });
-        }
-      }
     } catch (error) {
       logError("BullMQ Reddit delivery failed", error, { postId });
       throw error;

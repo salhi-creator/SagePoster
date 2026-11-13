@@ -4,7 +4,6 @@ import { AIanswer } from "../AI.js";
 import {
   getRedditPostComments,
   getRedditSubredditPosts,
-  replyToRedditComment,
   type RedditCommunityComment,
   type RedditCommunityPost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
@@ -12,13 +11,20 @@ import {
   claimRedditEngagementComment,
   finishRedditEngagementComment,
   hasRedditEngagementComment,
+  releaseRedditEngagementCommentClaim,
 } from "../SQL_DB/connectDB.js";
 import { logError } from "../utilis/logError.js";
 import {
   getRedditManagementMode,
+  enqueueRedditActivityEvent,
+  enqueueApprovedRedditAction,
+  replacePendingRedditPostWithReview,
   replacePendingRedditActivityWithClassifiedComments,
 } from "../caching_redis/redditAgentStream.js";
-import { analyzeRedditCommentsAgainstRules } from "./redditCommunityAnalyzer.js";
+import {
+  analyzeRedditCommentsAgainstRules,
+  reviewRedditPostEventAgainstCommunity,
+} from "./redditCommunityAnalyzer.js";
 
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
@@ -27,7 +33,9 @@ const connection = {
   password: process.env.REDIS_PASSWORD || undefined,
 };
 const streamName = process.env.REDDIT_AGENT_STREAM || "sageposter:reddit:agent-events";
-const groupName = process.env.REDDIT_ENGAGEMENT_STREAM_GROUP || "sageposter-reddit-engagement";
+const engagementGroupName = process.env.REDDIT_ENGAGEMENT_STREAM_GROUP || "sageposter-reddit-engagement";
+const communityAnalyzerGroupName =
+  process.env.REDDIT_COMMUNITY_ANALYZER_STREAM_GROUP || "sageposter-reddit-community-analyzer";
 const consumerName = `${os.hostname()}-${process.pid}`;
 const redis = new Redis(connection);
 
@@ -46,7 +54,11 @@ type PostContext = {
 };
 
 redis.on("error", (error) => {
-  logError("Reddit engagement Redis error", error, { streamName, groupName });
+  logError("Reddit engagement Redis error", error, {
+    streamName,
+    engagementGroupName,
+    communityAnalyzerGroupName,
+  });
 });
 
 function decodeMessages(result: unknown): StreamMessage[] {
@@ -195,11 +207,82 @@ async function createReply(
   };
 }
 
-async function processActivity(event: EngagementEvent, streamId: string): Promise<void> {
+async function processActivity(
+  event: EngagementEvent,
+  streamId: string,
+  stage: "community_analyzer" | "engagement",
+): Promise<void> {
   const owner = process.env.REDDIT_OWNER_USERNAME?.trim();
   if (!owner) throw new Error("REDDIT_OWNER_USERNAME must be configured to exclude owner-authored activity");
+  if (stage === "community_analyzer" && event.status !== "pending") return;
+  if (stage === "engagement" && event.status !== "approved") return;
 
-  let repliesPublished = 0;
+  // A pending post event must pass the post-level community analyzer before
+  // the engagement stage is allowed to inspect its comments.
+  if (event.type === "post" && event.status === "pending") {
+    const approvedIds: string[] = [];
+    const rejectedIds: string[] = [];
+    const rejectionReasons: Record<string, string> = {};
+    let resolvedSubreddit = "";
+    for (const sourceId of event.ids) {
+      const context = await getPostContext(event, sourceId);
+      if (!context) throw new Error(`Could not load post context for ${sourceId}`);
+      resolvedSubreddit = context.subreddit;
+      if (await getRedditManagementMode(context.subreddit) !== "owner") {
+        console.info("[Reddit community analyzer] Post event ignored outside owner mode", {
+          streamId,
+          subreddit: context.subreddit,
+          sourceId,
+        });
+        continue;
+      }
+
+      const postRecord = context.post as Record<string, unknown>;
+      const postAuthor = text(postRecord.author) ??
+        text(nested(event.details, "post").author) ?? text(event.details.author);
+      if (isOwner(postAuthor ?? null, owner)) {
+        console.info("[Reddit community analyzer] Skipping owner-authored post", { sourceId });
+        continue;
+      }
+
+      const title = text(postRecord.title) ?? "";
+      const content = text(postRecord.content) ?? text(postRecord.body) ?? "";
+      const review = await reviewRedditPostEventAgainstCommunity({
+        subreddit: context.subreddit,
+        postId: sourceId,
+        title,
+        content,
+      });
+      if (review.approved) approvedIds.push(sourceId);
+      else {
+        rejectedIds.push(sourceId);
+        rejectionReasons[sourceId] = review.reason;
+      }
+    }
+
+    if (approvedIds.length || rejectedIds.length) {
+      const replacements = await replacePendingRedditPostWithReview({
+        originalStreamId: streamId,
+        createdAt: new Date().toISOString(),
+        approvedIds,
+        rejectedIds,
+        subreddit: resolvedSubreddit,
+        rejectionReasons,
+        details: event.details,
+      });
+      console.info("[Reddit community analyzer] Replaced pending post event with review results", {
+        streamId,
+        approvedCount: approvedIds.length,
+        rejectedCount: rejectedIds.length,
+        approvedStreamIds: replacements.approvedStreamIds,
+      });
+    } else {
+      await redis.xdel(streamName, streamId);
+    }
+    return;
+  }
+
+  let repliesQueued = 0;
   for (const sourceId of event.ids) {
     const context = await getPostContext(event, sourceId);
     if (!context) {
@@ -240,7 +323,7 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
       (comment): comment is RedditCommunityComment => comment !== null,
     );
     const eventIds = new Set(event.ids.map((id) => asFullname(id, "comment")));
-    const selected = event.status === "approved"
+    const selected = event.type === "comment" && event.status === "approved"
       ? candidates.filter((comment) => eventIds.has(asFullname(comment.commentId, "comment")))
       : randomSample(candidates);
     console.info("[Reddit engagement] Selected comment candidates", {
@@ -250,17 +333,33 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
       selected: selected.length,
     });
 
-    if (!selected.length) {
-      if (event.status === "pending") await redis.xdel(streamName, streamId);
-      continue;
-    }
-
     const postRecord = context.post as Record<string, unknown>;
     const sourcePostId = text(postRecord.postId) ?? text(postRecord.id) ??
       (event.type === "post" ? sourceId : text(event.details.postId) ?? "");
     if (!sourcePostId) throw new Error("Event context is missing the source post ID for rule screening");
+
+    if (stage === "engagement" && event.type === "post" && event.status === "approved") {
+      if (selected.length) {
+        await enqueueRedditActivityEvent({
+          type: "comment",
+          status: "pending",
+          createdAt: new Date().toISOString(),
+          ids: selected.map((comment) => comment.commentId),
+          details: { subreddit: context.subreddit, postId: sourcePostId },
+        });
+      }
+      await redis.xdel(streamName, streamId);
+      continue;
+    }
+
+    const needsCommentScreening = stage === "community_analyzer" && event.status === "pending";
+    if (!selected.length) {
+      if (needsCommentScreening) await redis.xdel(streamName, streamId);
+      continue;
+    }
+
     let approvedComments = selected;
-    if (event.status === "pending") {
+    if (needsCommentScreening) {
       const screening = await analyzeRedditCommentsAgainstRules({
         subreddit: context.subreddit,
         sourcePostId,
@@ -269,6 +368,15 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
           content: text(postRecord.content) ?? text(postRecord.body) ?? "",
         },
         comments: selected.map(({ commentId, body, author }) => ({ commentId, body, author })),
+      });
+      await replacePendingRedditActivityWithClassifiedComments({
+        originalStreamId: streamId,
+        createdAt: new Date().toISOString(),
+        subreddit: context.subreddit,
+        postId: sourcePostId,
+        approvedIds: screening.approvedIds,
+        rejectedIds: screening.rejectedIds,
+        reasons: screening.reasons,
       });
       for (const commentId of screening.rejectedIds) {
         if (await claimRedditEngagementComment(commentId, context.subreddit)) {
@@ -279,16 +387,6 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
           });
         }
       }
-
-      await replacePendingRedditActivityWithClassifiedComments({
-        originalStreamId: streamId,
-        createdAt: new Date().toISOString(),
-        subreddit: context.subreddit,
-        postId: sourcePostId,
-        approvedIds: screening.approvedIds,
-        rejectedIds: screening.rejectedIds,
-        reasons: screening.reasons,
-      });
       console.info("[Reddit engagement] Replaced pending event with classification events", {
         streamId,
         approvedCount: screening.approvedIds.length,
@@ -310,83 +408,107 @@ async function processActivity(event: EngagementEvent, streamId: string): Promis
           await finishRedditEngagementComment({ commentId: comment.commentId, status: "skipped" });
           continue;
         }
-        const published = await replyToRedditComment({ commentId: comment.commentId, body: reply.body });
-        await finishRedditEngagementComment({
-          commentId: comment.commentId,
-          status: "replied",
-          replyId: published.commentId,
-          replyBody: published.body,
+        const queued = await enqueueApprovedRedditAction({
+          action: "reply_to_comment",
+          details: {
+            commentId: comment.commentId,
+            sourceCommentId: comment.commentId,
+            body: reply.body,
+            subreddit: context.subreddit,
+            sourcePostId,
+          },
         });
-        repliesPublished += 1;
-        console.info("[Reddit engagement] Reply published", {
+        repliesQueued += 1;
+        console.info("[Reddit engagement] Approved reply queued for executor", {
           commentId: comment.commentId,
-          replyId: published.commentId,
+          actionId: queued.actionId,
           subreddit: context.subreddit,
         });
       } catch (error) {
+        await releaseRedditEngagementCommentClaim(comment.commentId).catch((releaseError) => {
+          logError("Could not release Reddit engagement claim after action enqueue failure", releaseError, {
+            commentId: comment.commentId,
+          });
+        });
         logError("Reddit engagement reply failed", error, { commentId: comment.commentId, streamId });
         throw error;
       }
     }
+    if (event.type === "comment" && event.status === "approved") {
+      await redis.xdel(streamName, streamId);
+    }
   }
-  console.info("[Reddit engagement] Event processed", { streamId, repliesPublished });
+  console.info("[Reddit engagement] Event processed", { streamId, repliesQueued });
 }
 
-async function ack(streamId: string): Promise<void> {
-  await redis.xack(streamName, groupName, streamId);
-}
-
-async function handleMessage(message: StreamMessage): Promise<void> {
-  const event = parseEvent(message.fields);
-  if (!event) {
-    console.warn("[Reddit engagement] Unsupported stream entry acknowledged", {
-      streamId: message.id,
-      event: message.fields.event,
-    });
-    await ack(message.id);
-    return;
-  }
-  await processActivity(event, message.id);
-  await ack(message.id);
-}
-
-async function consume(): Promise<void> {
+async function ensureConsumerGroup(groupName: string): Promise<void> {
   try {
     await redis.xgroup("CREATE", streamName, groupName, "0", "MKSTREAM");
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes("BUSYGROUP")) throw error;
   }
-  console.info("[Reddit engagement] Stream consumer ready", { streamName, groupName, consumerName });
-
-  while (true) {
-    try {
-      const claimed = await redis.call(
-        "XAUTOCLAIM", streamName, groupName, consumerName, "60000", "0-0", "COUNT", "5",
-      ) as unknown;
-      const claimedMessages = Array.isArray(claimed)
-        ? decodeMessages([[streamName, claimed[1]]])
-        : [];
-      const fresh = await redis.xreadgroup(
-        "GROUP", groupName, consumerName, "COUNT", 5, "BLOCK", 5000,
-        "STREAMS", streamName, ">",
-      );
-      for (const message of [...claimedMessages, ...decodeMessages(fresh)]) {
-        try {
-          await handleMessage(message);
-        } catch (error) {
-          logError("Reddit engagement event left pending for retry", error, {
-            streamId: message.id,
-            event: message.fields.event,
-          });
-        }
-      }
-    } catch (error) {
-      logError("Reddit engagement stream read failed", error, { streamName, groupName });
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-    }
-  }
 }
 
-void consume().catch((error) => {
-  logError("Reddit engagement consumer stopped", error, { streamName, groupName });
-});
+async function handleMessage(
+  message: StreamMessage,
+  stage: "community_analyzer" | "engagement",
+  groupName: string,
+): Promise<void> {
+  const event = parseEvent(message.fields);
+  const expectedStatus = stage === "community_analyzer" ? "pending" : "approved";
+  if (!event || event.status !== expectedStatus) {
+    await redis.xack(streamName, groupName, message.id);
+    if (!event) console.info("[Reddit agent] Unrelated stream entry acknowledged", {
+      streamId: message.id,
+      event: message.fields.event,
+    });
+    return;
+  }
+  await processActivity(event, message.id, stage);
+  await redis.xack(streamName, groupName, message.id);
+}
+
+export async function runRedditActivityAgentBatch(
+  stage: "community_analyzer" | "engagement",
+  limit = 20,
+): Promise<number> {
+  const groupName = stage === "community_analyzer"
+    ? communityAnalyzerGroupName
+    : engagementGroupName;
+  await ensureConsumerGroup(groupName);
+  const count = Math.max(1, Math.min(20, Math.floor(limit)));
+  let processed = 0;
+  while (true) {
+    const claimed = await redis.call(
+      "XAUTOCLAIM", streamName, groupName, consumerName, "60000", "0-0", "COUNT", count,
+    ) as unknown;
+    const claimedMessages = Array.isArray(claimed)
+      ? decodeMessages([[streamName, claimed[1]]])
+      : [];
+    const fresh = await redis.xreadgroup(
+      "GROUP", groupName, consumerName, "COUNT", count,
+      "STREAMS", streamName, ">",
+    );
+    const batch = [...claimedMessages, ...decodeMessages(fresh)];
+    if (!batch.length) break;
+
+    let batchProcessed = 0;
+    for (const message of batch) {
+      try {
+        await handleMessage(message, stage, groupName);
+        processed += 1;
+        batchProcessed += 1;
+      } catch (error) {
+        logError("Reddit activity event left pending for retry", error, {
+          streamId: message.id,
+          event: message.fields.event,
+          stage,
+        });
+      }
+    }
+    // Entries that failed remain pending; don't spin on them in this run.
+    if (batchProcessed === 0) break;
+  }
+  console.info("[Reddit agent] Batch completed", { stage, groupName, processed });
+  return processed;
+}

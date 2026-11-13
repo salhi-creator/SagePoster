@@ -13,7 +13,7 @@ import {
   getManageablePublishedPosts,
 } from "../SQL_DB/connectDB.js";
 import { sendMessageBackToMe } from "../utilis.js";
-import { deleteRedditPost } from "../Platform-ReplyHandle/sendToReddit.js";
+import { enqueueAndWaitRedditAction } from "../caching_redis/redditAgentStream.js";
 
 type TopicGroup = {
   topicKey: string;
@@ -269,7 +269,11 @@ async function deleteTopic(
       if (post.platform === "reddit") {
         if (redditBehaviour === "keep") continue;
         if (!post.externalPostId) throw new Error("Saved Reddit post has no Reddit post ID");
-        await deleteRedditPost(post.externalPostId);
+        if (!post.subreddit) throw new Error("Saved Reddit post has no subreddit");
+        await enqueueAndWaitRedditAction({
+          action: "remove_post",
+          details: { postId: post.externalPostId, subreddit: post.subreddit },
+        });
       }
       const result = await deleteManagedPublishedPost(post.postId);
       if (result) removed += 1;

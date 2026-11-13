@@ -27,6 +27,7 @@ function platformForOption(option?: TelegramOptions): AIPlatform | undefined {
   if (option === "reddit-community-analyzer") return "REDDIT";
   if (option === "reddit-comment-analyzer") return "REDDIT";
   if (option === "reddit-engagement-reply") return "REDDIT";
+  if (option === "reddit-strategy-planner") return "REDDIT";
   if (option === "sheduled-telegram" || option?.startsWith("tele")) {
     return "TELEGRAM";
   }
@@ -130,7 +131,7 @@ ${message}
 REDDIT COMMUNITY ANALYZER AGENT:
 ${instruction}
 
-COMMUNITY RULES, CONTEXT, AND CANDIDATE DRAFT (JSON):
+COMMUNITY RULES, CONTEXT, AND CANDIDATE POST OR DRAFT (JSON):
 ${message}
 `;
   } else if (option === "reddit-comment-analyzer") {
@@ -151,6 +152,16 @@ REDDIT ENGAGEMENT AGENT:
 ${instruction}
 
 POST AND COMMENT CONTEXT (JSON):
+${message}
+`;
+  } else if (option === "reddit-strategy-planner") {
+    const promptPath = path.join(__dirname, "Prompts", "redditStrategyPlanner.txt");
+    const instruction = await FileReader(promptPath);
+    msg = `
+REDDIT STRATEGY PLANNER AGENT:
+${instruction}
+
+RECENT REDDIT STREAM EVENTS (JSON):
 ${message}
 `;
   } else if (option === "sheduled-telegram") {

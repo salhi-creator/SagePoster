@@ -122,6 +122,57 @@ export async function reviewRedditDraftAgainstCommunity(
   return review;
 }
 
+/** Review a post received from the Reddit events stream against its subreddit rules. */
+export async function reviewRedditPostEventAgainstCommunity(input: {
+  subreddit: string;
+  postId: string;
+  title: string;
+  content: string;
+}): Promise<RedditDraftReview> {
+  const subreddit = input.subreddit.trim().replace(/^r\//i, "");
+  if (!subreddit || !input.postId.trim() || !input.title.trim()) {
+    throw new Error("A subreddit, Reddit post ID, and post title are required for post analysis");
+  }
+
+  const checked = await checkRedditCrosspost({
+    sourcePostId: input.postId,
+    targetSubreddit: subreddit,
+    title: null,
+  });
+  const isOwnedCommunity = isOwnedRedditCommunity(checked.targetSubreddit);
+  const recentCommunityPosts = isOwnedCommunity
+    ? await getRedditSubredditPosts(checked.targetSubreddit, 12)
+    : [];
+  const normalizedPostId = input.postId.replace(/^t3_/i, "");
+  const comparisonPosts = recentCommunityPosts.filter(
+    (post) => post.postId.replace(/^t3_/i, "") !== normalizedPostId,
+  );
+  const result = await AIanswer(
+    JSON.stringify({
+      subreddit: checked.targetSubreddit,
+      rules: checked.rules,
+      isOwnedCommunity,
+      recentCommunityPosts: comparisonPosts,
+      candidatePost: {
+        postId: input.postId,
+        title: input.title.trim(),
+        content: input.content.trim(),
+      },
+    }),
+    "reddit-community-analyzer",
+  );
+  const review = parseDraftReview(result);
+  console.info("[Reddit community analyzer] Stream post review completed", {
+    subreddit: checked.targetSubreddit,
+    postId: input.postId,
+    approved: review.approved,
+    reason: review.reason,
+    ruleCount: checked.rules.length,
+    recentCommunityPostCount: comparisonPosts.length,
+  });
+  return review;
+}
+
 /** Screen engagement candidates against the actual subreddit rules. */
 export async function analyzeRedditCommentsAgainstRules(input: {
   subreddit: string;

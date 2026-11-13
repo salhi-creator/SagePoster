@@ -3,15 +3,14 @@ import { Redis } from "ioredis";
 import { AIanswer } from "../AI.js";
 import {
   checkRedditCrosspost,
-  publishRedditCrosspost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
 import {
-  completeRedditCrosspost,
   hasRedditCrosspost,
   reserveRedditCrosspost,
-  savePublishedRedditPost,
 } from "../SQL_DB/connectDB.js";
 import { logError } from "../utilis/logError.js";
+import { enqueueApprovedRedditAction } from "../caching_redis/redditAgentStream.js";
+import { scanScheduledRedditPosts } from "../queues/redditCrosspostWorker.js";
 
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
@@ -127,41 +126,21 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
     targetSubreddit: checked.targetSubreddit,
   });
   if (!reserved) return;
-
-  const published = await publishRedditCrosspost(request);
-  const recorded = await completeRedditCrosspost({
-    sourcePostId: candidate.sourcePostId,
-    targetSubreddit: published.targetSubreddit,
-    crosspostId: published.crosspostId,
-    url: published.url,
-  });
-  if (!recorded) throw new Error("Crosspost published, but its database history could not be completed");
-
-  try {
-    await savePublishedRedditPost(
-      candidate.topic,
-      {
-        subreddit: published.targetSubreddit,
-        title: request.title ?? checked.sourcePost.title,
-        content: checked.sourcePost.body?.trim() || checked.sourcePost.title,
-        redditPostId: published.crosspostId,
-        url: published.url,
-      },
-      { deliveryType: "one-time" },
-    );
-  } catch (error) {
-    logError("Crossposted Reddit history save failed", error, {
+  const action = await enqueueApprovedRedditAction({
+    action: "crosspost",
+    details: {
       sourcePostId: candidate.sourcePostId,
-      crosspostId: published.crosspostId,
-    });
-  }
-
-  console.info("[Crosspost handler] Crosspost published", {
+      targetSubreddit: checked.targetSubreddit,
+      title: request.title ?? checked.sourcePost.title,
+      content: checked.sourcePost.body?.trim() || checked.sourcePost.title,
+      topic: candidate.topic,
+    },
+  });
+  console.info("[Crosspost handler] Approved crosspost action queued", {
     streamId,
+    actionId: action.actionId,
     sourcePostId: candidate.sourcePostId,
-    crosspostId: published.crosspostId,
-    targetSubreddit: published.targetSubreddit,
-    url: published.url,
+    targetSubreddit: checked.targetSubreddit,
   });
 }
 
@@ -185,43 +164,45 @@ async function handleMessage(message: StreamMessage): Promise<void> {
   await acknowledge(message.id);
 }
 
-async function consume(): Promise<void> {
+export async function runRedditCrosspostHandlerBatch(limit = 20): Promise<number> {
+  await scanScheduledRedditPosts();
   try {
     await redis.xgroup("CREATE", streamName, groupName, "0", "MKSTREAM");
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes("BUSYGROUP")) throw error;
   }
-  console.info("[Crosspost handler] Stream consumer ready", { streamName, groupName, consumerName });
-
+  const count = Math.max(1, Math.min(20, Math.floor(limit)));
+  let processed = 0;
   while (true) {
-    try {
-      const claimed = await redis.call(
-        "XAUTOCLAIM", streamName, groupName, consumerName, "60000", "0-0", "COUNT", "1",
-      ) as unknown;
-      const claimedMessages = Array.isArray(claimed)
-        ? decodeMessages([[streamName, claimed[1]]])
-        : [];
-      const fresh = await redis.xreadgroup(
-        "GROUP", groupName, consumerName, "COUNT", 1, "BLOCK", 5000,
-        "STREAMS", streamName, ">",
-      );
-      for (const message of [...claimedMessages, ...decodeMessages(fresh)]) {
-        try {
-          await handleMessage(message);
-        } catch (error) {
-          logError("Crosspost candidate left pending for retry", error, {
-            streamId: message.id,
-            event: message.fields.event,
-          });
-        }
-      }
-    } catch (error) {
-      logError("Crosspost handler stream read failed", error, { streamName, groupName });
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-    }
-  }
-}
+    const claimed = await redis.call(
+      "XAUTOCLAIM", streamName, groupName, consumerName, "60000", "0-0", "COUNT", count,
+    ) as unknown;
+    const claimedMessages = Array.isArray(claimed)
+      ? decodeMessages([[streamName, claimed[1]]])
+      : [];
+    const fresh = await redis.xreadgroup(
+      "GROUP", groupName, consumerName, "COUNT", count,
+      "STREAMS", streamName, ">",
+    );
+    const batch = [...claimedMessages, ...decodeMessages(fresh)];
+    if (!batch.length) break;
 
-void consume().catch((error) => {
-  logError("Crosspost handler stopped", error, { streamName, groupName });
-});
+    let batchProcessed = 0;
+    for (const message of batch) {
+      try {
+        await handleMessage(message);
+        processed += 1;
+        batchProcessed += 1;
+      } catch (error) {
+        logError("Crosspost candidate left pending for retry", error, {
+          streamId: message.id,
+          event: message.fields.event,
+        });
+      }
+    }
+    // Failed entries stay pending; avoid reclaiming them repeatedly in this run.
+    if (batchProcessed === 0) break;
+  }
+  console.info("[Crosspost handler] Batch completed", { groupName, processed });
+  return processed;
+}

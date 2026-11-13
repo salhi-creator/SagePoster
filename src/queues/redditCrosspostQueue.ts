@@ -36,6 +36,11 @@ export async function ensureRedditCrosspostScanner(): Promise<void> {
   console.info("[Reddit crosspost] Periodic scanner configured", { everyDays: days });
 }
 
+/** Stop the pre-strategy repeat scheduler; the strategy planner now runs scans. */
+export async function disableLegacyRedditCrosspostScanner(): Promise<void> {
+  await redditCrosspostQueue.removeJobScheduler("scheduled-reddit-crosspost-scan");
+}
+
 redditCrosspostQueue.on("error", (error) => {
   console.error("[Reddit crosspost] Queue error", error);
 });

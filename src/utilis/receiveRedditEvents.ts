@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { timingSafeEqual } from "node:crypto";
 import {
   enqueueRedditActivityEvent,
   type RedditActivityType,
@@ -61,6 +62,25 @@ export async function receiveRedditEvents(
   req: Request,
   res: Response,
 ): Promise<void> {
+const expectedToken = process.env.REDDIT_SERVICE_TOKEN?.trim();
+  const authorization = req.header("authorization") ?? "";
+  const suppliedToken = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : "";
+  if (!expectedToken) {
+    res.status(503).json({ ok: false, error: "Reddit event authentication is not configured." });
+    return;
+  }
+  const expectedBuffer = Buffer.from(expectedToken);
+  const suppliedBuffer = Buffer.from(suppliedToken);
+  if (
+    expectedBuffer.length !== suppliedBuffer.length ||
+    !timingSafeEqual(expectedBuffer, suppliedBuffer)
+  ) {
+    res.status(401).json({ ok: false, error: "Unauthorized." });
+    return;
+  }
+
   const event = parseRedditEvent(req.body);
   if (!event) {
     res.status(400).json({

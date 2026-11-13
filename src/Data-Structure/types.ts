@@ -198,6 +198,7 @@ export type AIOption =
   | "reddit-community-analyzer"
   | "reddit-comment-analyzer"
   | "reddit-engagement-reply"
+  | "reddit-strategy-planner"
   | "linkedin";
 
 export const telegramReactions = [

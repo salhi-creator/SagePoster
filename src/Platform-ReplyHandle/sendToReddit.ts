@@ -177,25 +177,57 @@ export async function getRedditPostComments(
 export async function replyToRedditComment(input: {
   commentId: string;
   body: string;
-}): Promise<{ commentId: string; body: string; idempotencyKey?: string }> {
+  idempotencyKey: string;
+}): Promise<{ commentId: string; body: string; idempotencyKey: string }> {
   const commentId = input.commentId.trim();
   const body = input.body.trim();
-  if (!commentId || !body) throw new Error("A Reddit comment ID and reply body are required");
+  const idempotencyKey = input.idempotencyKey.trim();
+  if (!commentId || !body || !idempotencyKey) throw new Error("A Reddit comment ID, reply body, and idempotency key are required");
   const response = await request<{
     ok?: boolean;
     commentId?: string;
     body?: string;
     idempotencyKey?: string | null;
     error?: string;
-  }>("/comments/reply", { commentId, body });
+  }>("/comments/reply", { commentId, body, idempotencyKey });
   if (!response.commentId || typeof response.body !== "string") {
     throw new Error(response.error || "Reddit service returned an incomplete comment reply response");
   }
   return {
     commentId: response.commentId,
     body: typeof response.body === "string" ? response.body : body,
-    ...(response.idempotencyKey ? { idempotencyKey: response.idempotencyKey } : {}),
+    idempotencyKey: response.idempotencyKey ?? idempotencyKey,
   };
+}
+
+export async function createRedditComment(input: {
+  postId: string;
+  body: string;
+}): Promise<{ commentId: string; url: string }> {
+  const postId = input.postId.trim();
+  const body = input.body.trim();
+  if (!postId || !body) throw new Error("A Reddit post ID and comment body are required");
+  const response = await request<{
+    ok?: boolean;
+    commentId?: string;
+    url?: string;
+    error?: string;
+  }>("/comments", { postId, body });
+  if (!response.commentId || !response.url) {
+    throw new Error(response.error || "Reddit service returned an incomplete comment response");
+  }
+  return { commentId: response.commentId, url: response.url };
+}
+
+/** Requires the Devvit service to expose POST /comments/delete. */
+export async function deleteRedditComment(commentIdInput: string): Promise<void> {
+  const commentId = commentIdInput.trim();
+  if (!commentId) throw new Error("Reddit comment ID is required for deletion");
+  const result = await request<RedditDeleteResponse & { commentId?: string }>(
+    "/comments/delete",
+    { commentId },
+  );
+  if (!result.ok) throw new Error(result.error || "Reddit comment deletion failed");
 }
 
 export async function sendToReddit(post: {
