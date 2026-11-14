@@ -1,7 +1,7 @@
 import { FileReader, safeExtractJSON } from "../../utilis.js";
 
 
-import {__dirname} from '../../index.js'
+import {promptsDirectory} from '../../index.js'
 import path from "node:path";
 import type { PostForm, AIOption as TelegramOptions  } from "../../Data-Structure/types.js";
 import {  telegramReactions } from "../../Data-Structure/types.js";
@@ -17,8 +17,7 @@ export async function telegramBackMessages(message: string, option: TelegramOpti
   let msg = "";
   if (option) {
     const instructionPath = path.join(
-      __dirname,
-      "Prompts",
+      promptsDirectory,
       "teleContent",
       "outputs.txt",
     );

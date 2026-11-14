@@ -3,7 +3,7 @@ import { groq } from "./AIModels/Groq.js";
 import { gemini } from "./AIModels/Gemini.js";
 // import { mistral } from "./AIModels/mistral.js";
 
-import { __dirname } from "./index.js";
+import { promptsDirectory } from "./index.js";
 import path from "path";
 
 import type { AIOption as TelegramOptions, PostForm } from "./Data-Structure/types.js";
@@ -95,7 +95,7 @@ export async function AIanswer(
     option === "tele-button" || option === "tele-reaction" ? "array" : "object";
 
   if (option === "manage-posts") {
-    const promptPath = path.join(__dirname, "Prompts", "managePosts.txt");
+    const promptPath = path.join(promptsDirectory, "managePosts.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 POST MANAGEMENT INSTRUCTIONS:
@@ -105,7 +105,7 @@ MANAGEMENT INPUT (JSON):
 ${message}
 `;
   } else if (option === "reddit-crosspost-review") {
-    const promptPath = path.join(__dirname, "Prompts", "redditCrosspostReview.txt");
+    const promptPath = path.join(promptsDirectory, "redditCrosspostReview.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 REDDIT CROSSPOST RULE REVIEW:
@@ -115,7 +115,7 @@ CROSSPOST CHECK DATA (JSON):
 ${message}
 `;
   } else if (option === "reddit-content-creator") {
-    const promptPath = path.join(__dirname, "Prompts", "redditContentCreator.txt");
+    const promptPath = path.join(promptsDirectory, "redditContentCreator.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 REDDIT CONTENT CREATOR AGENT:
@@ -125,7 +125,7 @@ COMMUNITY AND POST HISTORY (JSON):
 ${message}
 `;
   } else if (option === "reddit-community-analyzer") {
-    const promptPath = path.join(__dirname, "Prompts", "redditCommunityAnalyzer.txt");
+    const promptPath = path.join(promptsDirectory, "redditCommunityAnalyzer.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 REDDIT COMMUNITY ANALYZER AGENT:
@@ -135,7 +135,7 @@ COMMUNITY RULES, CONTEXT, AND CANDIDATE POST OR DRAFT (JSON):
 ${message}
 `;
   } else if (option === "reddit-comment-analyzer") {
-    const promptPath = path.join(__dirname, "Prompts", "redditCommentAnalyzer.txt");
+    const promptPath = path.join(promptsDirectory, "redditCommentAnalyzer.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 REDDIT COMMENT COMMUNITY ANALYZER:
@@ -145,7 +145,7 @@ SUBREDDIT RULES AND COMMENTS (JSON):
 ${message}
 `;
   } else if (option === "reddit-engagement-reply") {
-    const promptPath = path.join(__dirname, "Prompts", "redditEngagementReply.txt");
+    const promptPath = path.join(promptsDirectory, "redditEngagementReply.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 REDDIT ENGAGEMENT AGENT:
@@ -155,7 +155,7 @@ POST AND COMMENT CONTEXT (JSON):
 ${message}
 `;
   } else if (option === "reddit-strategy-planner") {
-    const promptPath = path.join(__dirname, "Prompts", "redditStrategyPlanner.txt");
+    const promptPath = path.join(promptsDirectory, "redditStrategyPlanner.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 REDDIT STRATEGY PLANNER AGENT:
@@ -165,7 +165,7 @@ RECENT REDDIT STREAM EVENTS (JSON):
 ${message}
 `;
   } else if (option === "sheduled-telegram") {
-    const promptPath = path.join(__dirname, "Prompts", "scheduledTelegram.txt");
+    const promptPath = path.join(promptsDirectory, "scheduledTelegram.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 SCHEDULED TELEGRAM PROMPT:
@@ -175,7 +175,7 @@ SCHEDULED TELEGRAM INPUT (JSON):
 ${message}
 `;
   } else if (option === "scheduled-discord") {
-    const promptPath = path.join(__dirname, "Prompts", "scheduledDiscord.txt");
+    const promptPath = path.join(promptsDirectory, "scheduledDiscord.txt");
     const instruction = await FileReader(promptPath);
     msg = `
 SCHEDULED DISCORD PROMPT:
@@ -195,7 +195,7 @@ ${message}
     /*
      * NORMAL POST PLANNER
      */
-    const instructionPath = path.join(__dirname, "Prompts", "instruction.txt");
+    const instructionPath = path.join(promptsDirectory, "instruction.txt");
 
     const instruction = await FileReader(instructionPath);
 

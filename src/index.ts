@@ -27,9 +27,15 @@ import {
 import type { PostForm } from "./Data-Structure/types.js";
 
 import path from "path";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
+export const promptsDirectory = [
+  path.join(__dirname, "Prompts"),
+  path.resolve(__dirname, "..", "Prompts"),
+  path.resolve(process.cwd(), "src", "Prompts"),
+].find((directory) => fs.existsSync(directory)) ?? path.join(__dirname, "Prompts");
 
 dotenv.config();
 

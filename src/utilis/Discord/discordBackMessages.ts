@@ -1,6 +1,6 @@
 import { FileReader } from "../../utilis.js";
 import path from "path";
-import { __dirname } from "../../index.js";
+import { promptsDirectory } from "../../index.js";
 
 let msg = "";
 
@@ -9,8 +9,7 @@ let msg = "";
    * TELEGRAM STRUCTURES
    */
   const instructionPath = path.join(
-    __dirname,
-    "Prompts",
+    promptsDirectory,
     "discordContent",
     "outputs.txt",
   );
