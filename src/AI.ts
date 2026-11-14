@@ -215,6 +215,22 @@ ${message}
 
   const providerKeys = getProviderKeys(option, message);
   const route = providerKeys.platform ?? "shared planner keys";
+  if (providerKeys.platform === "REDDIT") {
+    const configuredLimit = Number(process.env.REDDIT_AI_MAX_INPUT_CHARS ?? 80_000);
+    const maxInputChars = Number.isFinite(configuredLimit) && configuredLimit > 0
+      ? Math.floor(configuredLimit)
+      : 80_000;
+    if (msg.length > maxInputChars) {
+      console.warn("[AI] Reddit request exceeds configured input size; content was not truncated", {
+        option: option ?? "planner",
+        inputChars: msg.length,
+        maxInputChars,
+      });
+      throw new Error(
+        `Reddit AI input is ${msg.length} characters, above the ${maxInputChars}-character limit; no content was sent`,
+      );
+    }
+  }
   console.info("[AI] Request started", { option: option ?? "planner", route });
 
   // Gemini

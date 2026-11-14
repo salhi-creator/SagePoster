@@ -5,6 +5,7 @@ import {
   getRedditSubredditPosts,
   type RedditCommunityPost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
+import { chunkRedditComments } from "./redditAiLimits.js";
 
 export type RedditCommunityContext = {
   subreddit: string;
@@ -187,47 +188,54 @@ export async function analyzeRedditCommentsAgainstRules(input: {
     targetSubreddit: input.subreddit,
     title: null,
   });
-  const result = await AIanswer(
-    JSON.stringify({
-      subreddit: checked.targetSubreddit,
-      rules: checked.rules,
-      post: input.post,
-      comments: input.comments,
-    }),
-    "reddit-comment-analyzer",
-  );
-  if (!result || typeof result !== "object") {
-    throw new Error("Reddit comment analyzer returned no classification");
-  }
-
-  const output = result as Record<string, unknown>;
-  const approvedIds = Array.isArray(output.approvedIds)
-    ? output.approvedIds.filter((id): id is string => typeof id === "string")
-    : [];
-  const rejectedIds = Array.isArray(output.rejectedIds)
-    ? output.rejectedIds.filter((id): id is string => typeof id === "string")
-    : [];
-  const suppliedIds = input.comments.map((comment) => comment.commentId);
-  const classified = [...approvedIds, ...rejectedIds];
-  if (
-    approvedIds.length + rejectedIds.length !== suppliedIds.length ||
-    new Set(classified).size !== classified.length ||
-    suppliedIds.some((id) => !classified.includes(id)) ||
-    classified.some((id) => !suppliedIds.includes(id))
-  ) {
-    throw new Error("Reddit comment analyzer did not return an exact, non-overlapping ID partition");
-  }
-
-  const rawReasons = output.reasons;
+  const baseContext = {
+    subreddit: checked.targetSubreddit,
+    rules: checked.rules,
+    post: input.post,
+  };
+  const approvedIds: string[] = [];
+  const rejectedIds: string[] = [];
   const reasons: Record<string, string> = {};
-  if (rawReasons && typeof rawReasons === "object" && !Array.isArray(rawReasons)) {
-    for (const id of rejectedIds) {
-      const reason = (rawReasons as Record<string, unknown>)[id];
-      if (typeof reason === "string" && reason.trim()) reasons[id] = reason.trim();
+
+  for (const comments of chunkRedditComments(input.comments, baseContext)) {
+    const result = await AIanswer(
+      JSON.stringify({ ...baseContext, comments }),
+      "reddit-comment-analyzer",
+    );
+    if (!result || typeof result !== "object") {
+      throw new Error("Reddit comment analyzer returned no classification");
     }
-  }
-  for (const id of rejectedIds) {
-    reasons[id] ??= "Rejected by the subreddit rules screening.";
+
+    const output = result as Record<string, unknown>;
+    const batchApproved = Array.isArray(output.approvedIds)
+      ? output.approvedIds.filter((id): id is string => typeof id === "string")
+      : [];
+    const batchRejected = Array.isArray(output.rejectedIds)
+      ? output.rejectedIds.filter((id): id is string => typeof id === "string")
+      : [];
+    const suppliedIds = comments.map((comment) => comment.commentId);
+    const classified = [...batchApproved, ...batchRejected];
+    if (
+      batchApproved.length + batchRejected.length !== suppliedIds.length ||
+      new Set(classified).size !== classified.length ||
+      suppliedIds.some((id) => !classified.includes(id)) ||
+      classified.some((id) => !suppliedIds.includes(id))
+    ) {
+      throw new Error("Reddit comment analyzer did not return an exact, non-overlapping ID partition");
+    }
+
+    approvedIds.push(...batchApproved);
+    rejectedIds.push(...batchRejected);
+    const rawReasons = output.reasons;
+    if (rawReasons && typeof rawReasons === "object" && !Array.isArray(rawReasons)) {
+      for (const id of batchRejected) {
+        const reason = (rawReasons as Record<string, unknown>)[id];
+        if (typeof reason === "string" && reason.trim()) reasons[id] = reason.trim();
+      }
+    }
+    for (const id of batchRejected) {
+      reasons[id] ??= "Rejected by the subreddit rules screening.";
+    }
   }
 
   console.info("[Reddit community analyzer] Comment screening completed", {

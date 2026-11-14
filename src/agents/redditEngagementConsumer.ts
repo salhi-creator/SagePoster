@@ -25,6 +25,10 @@ import {
   analyzeRedditCommentsAgainstRules,
   reviewRedditPostEventAgainstCommunity,
 } from "./redditCommunityAnalyzer.js";
+import {
+  chunkRedditComments,
+  MAX_REDDIT_AI_NEARBY_COMMENTS,
+} from "./redditAiLimits.js";
 
 const connection = {
   host: process.env.REDIS_HOST || "127.0.0.1",
@@ -53,6 +57,7 @@ type PostContext = {
   subreddit: string;
   comments: RedditCommunityComment[];
 };
+type ReplyAiComment = Pick<RedditCommunityComment, "commentId" | "body" | "author">;
 
 redis.on("error", (error) => {
   logError("Reddit engagement Redis error", error, {
@@ -180,38 +185,62 @@ async function createReplies(
   targetComments: RedditCommunityComment[],
   nearbyComments: RedditCommunityComment[],
 ): Promise<Map<string, GeneratedRedditReply>> {
-  const result = await AIanswer(
-    JSON.stringify({ parentPost: post, targetComments, nearbyComments }),
-    "reddit-engagement-reply",
-  );
-  if (!result || typeof result !== "object") throw new Error("Engagement AI returned no reply batch");
-  const response = result as Record<string, unknown>;
-  if (!Array.isArray(response.replies)) {
-    throw new Error("Engagement AI returned no replies array");
-  }
-
-  const targetIds = new Set(targetComments.map((comment) => comment.commentId));
+  const postRecord = post as Record<string, unknown>;
+  const parentPost = {
+    postId: text(postRecord.postId) ?? text(postRecord.id) ?? "",
+    title: text(postRecord.title) ?? "",
+    content: text(postRecord.content) ?? text(postRecord.body) ?? "",
+    subreddit: text(postRecord.subreddit) ?? "",
+  };
+  const toReplyAiComment = ({ commentId, body, author }: RedditCommunityComment): ReplyAiComment => ({
+    commentId,
+    body,
+    author,
+  });
+  const targetInputs = targetComments.map(toReplyAiComment);
+  const nearbyInputs = nearbyComments.map(toReplyAiComment);
   const replies = new Map<string, GeneratedRedditReply>();
-  for (const value of response.replies) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("Engagement AI returned a malformed reply item");
+  const baseContext = { parentPost, nearbyComments: nearbyInputs };
+  const commentBatches = chunkRedditComments(targetInputs, baseContext);
+
+  for (const batch of commentBatches) {
+    const result = await AIanswer(
+      JSON.stringify({ ...baseContext, targetComments: batch }),
+      "reddit-engagement-reply",
+    );
+    if (!result || typeof result !== "object") throw new Error("Engagement AI returned no reply batch");
+    const response = result as Record<string, unknown>;
+    if (!Array.isArray(response.replies)) {
+      throw new Error("Engagement AI returned no replies array");
     }
-    const item = value as Record<string, unknown>;
-    const commentId = typeof item.commentId === "string" ? item.commentId.trim() : "";
-    if (
-      !targetIds.has(commentId) || replies.has(commentId) ||
-      typeof item.shouldReply !== "boolean" || typeof item.body !== "string"
-    ) {
-      throw new Error("Engagement AI returned an invalid or duplicate comment reply");
+
+    const batchIds = new Set(batch.map((comment) => comment.commentId));
+    const batchReplies = new Map<string, GeneratedRedditReply>();
+    for (const value of response.replies) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("Engagement AI returned a malformed reply item");
+      }
+      const item = value as Record<string, unknown>;
+      const commentId = typeof item.commentId === "string" ? item.commentId.trim() : "";
+      if (
+        !batchIds.has(commentId) || batchReplies.has(commentId) ||
+        typeof item.shouldReply !== "boolean" || typeof item.body !== "string"
+      ) {
+        throw new Error("Engagement AI returned an invalid or duplicate comment reply");
+      }
+      batchReplies.set(commentId, {
+        commentId,
+        shouldReply: item.shouldReply,
+        body: item.body.trim(),
+        reason: typeof item.reason === "string" ? item.reason : "",
+      });
     }
-    replies.set(commentId, {
-      commentId,
-      shouldReply: item.shouldReply,
-      body: item.body.trim(),
-      reason: typeof item.reason === "string" ? item.reason : "",
-    });
+    if (batchReplies.size !== batchIds.size) {
+      throw new Error("Engagement AI did not return a decision for every target comment in the batch");
+    }
+    for (const [commentId, reply] of batchReplies) replies.set(commentId, reply);
   }
-  if (replies.size !== targetIds.size) {
+  if (replies.size !== targetInputs.length) {
     throw new Error("Engagement AI did not return a decision for every target comment");
   }
   return replies;
@@ -440,7 +469,9 @@ async function processActivity(
       repliesByComment = await createReplies(
         context.post,
         claimedComments,
-        context.comments.filter((comment) => !targetCommentIds.has(comment.commentId)).slice(-12),
+        context.comments
+          .filter((comment) => !targetCommentIds.has(comment.commentId))
+          .slice(-MAX_REDDIT_AI_NEARBY_COMMENTS),
       );
     } catch (error) {
       await Promise.all(claimedComments.map(async (comment) => {

@@ -68,6 +68,49 @@ function parseIntervals(value: unknown): { intervals: Record<RedditAgentName, nu
   };
 }
 
+function compactPlannerEvents(events: Awaited<ReturnType<typeof getRecentRedditStreamEvents>>) {
+  return events.map(({ id, fields }) => {
+    let details: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(fields.details ?? "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        details = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // The event still contributes its top-level status and event type.
+    }
+    let resultStatus: string | undefined;
+    try {
+      const parsed: unknown = JSON.parse(fields.result ?? "null");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const value = (parsed as Record<string, unknown>).status;
+        if (typeof value === "string") resultStatus = value;
+      }
+    } catch {
+      // Ignore malformed optional result details in the planning summary.
+    }
+    let itemCount: number | undefined;
+    try {
+      const ids: unknown = JSON.parse(fields.ids ?? "null");
+      if (Array.isArray(ids)) itemCount = ids.length;
+    } catch {
+      // Ignore malformed optional ID details in the planning summary.
+    }
+    return {
+      id,
+      event: fields.event ?? "unknown",
+      status: fields.status ?? "unknown",
+      resultStatus,
+      type: fields.type,
+      action: fields.action,
+      createdAt: fields.createdAt,
+      subreddit: fields.subreddit ?? (typeof details.subreddit === "string" ? details.subreddit : undefined),
+      postId: fields.postId ?? (typeof details.postId === "string" ? details.postId : undefined),
+      itemCount,
+    };
+  });
+}
+
 async function scheduleAgentsFromStream(): Promise<void> {
   const activeSubreddits = await ownerManagedSubreddits();
   if (!activeSubreddits.length) {
@@ -91,7 +134,7 @@ async function scheduleAgentsFromStream(): Promise<void> {
     await redditAgentQueue.removeJobScheduler("reddit-agent-crosspost_handler");
   }
 
-  const recentEvents = await getRecentRedditStreamEvents(50);
+  const recentEvents = compactPlannerEvents(await getRecentRedditStreamEvents(50));
   const result = await AIanswer(
     JSON.stringify({
       managedSubreddits: activeSubreddits,
@@ -190,10 +233,18 @@ const worker = new Worker<RedditAgentJobData>(
 );
 
 worker.on("completed", (job) => {
-  console.info("[Reddit agent queue] Job completed", { jobId: job.id, data: job.data });
+  console.info("[Reddit agent queue] Job completed", {
+    jobId: job.id,
+    kind: job.data?.kind,
+    agent: job.data?.kind === "agent-run" ? job.data.agent : undefined,
+  });
 });
 worker.on("failed", (job, error) => {
-  logError("Reddit agent queue job failed", error, { jobId: job?.id, data: job?.data });
+  logError("Reddit agent queue job failed", error, {
+    jobId: job?.id,
+    kind: job?.data?.kind,
+    agent: job?.data?.kind === "agent-run" ? job.data.agent : undefined,
+  });
 });
 worker.on("error", (error) => {
   logError("Reddit agent queue worker error", error, {

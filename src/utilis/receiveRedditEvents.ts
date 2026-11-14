@@ -15,6 +15,9 @@ type RedditEventRequest = {
   details: Record<string, unknown>;
 };
 
+const MAX_REDDIT_EVENT_DETAILS_BYTES = 64 * 1024;
+const MAX_REDDIT_EVENT_ID_LENGTH = 128;
+
 function parseRedditEvent(body: unknown): RedditEventRequest | null {
   if (!body || typeof body !== "object") return null;
   const event = body as Record<string, unknown>;
@@ -39,7 +42,11 @@ function parseRedditEvent(body: unknown): RedditEventRequest | null {
     !Array.isArray(ids) ||
     ids.length === 0 ||
     ids.length > 100 ||
-    ids.some((id) => typeof id !== "string" || id.trim().length === 0)
+    ids.some((id) =>
+      typeof id !== "string" ||
+      id.trim().length === 0 ||
+      id.trim().length > MAX_REDDIT_EVENT_ID_LENGTH,
+    )
   ) {
     return null;
   }
@@ -63,8 +70,10 @@ function parseRedditEvent(body: unknown): RedditEventRequest | null {
     ? requestedPostId
     : requestedPostId || (ids.length === 1 ? (ids[0] as string).trim() : "");
   if (event.type === "comment" && !postId) return null;
+  if (postId.length > MAX_REDDIT_EVENT_ID_LENGTH) return null;
   if (event.type === "comment" &&
-      typeof details.subreddit !== "string" && typeof nestedPost.subreddit !== "string") {
+      !(typeof details.subreddit === "string" && details.subreddit.trim()) &&
+      !(typeof nestedPost.subreddit === "string" && nestedPost.subreddit.trim())) {
     return null;
   }
 
@@ -108,10 +117,20 @@ const expectedToken = process.env.REDDIT_SERVICE_TOKEN?.trim();
   }
 
   const event = parseRedditEvent(req.body);
+  let detailsBytes = 0;
+  try {
+    detailsBytes = Buffer.byteLength(JSON.stringify((req.body as Record<string, unknown>)?.details ?? {}));
+  } catch {
+    detailsBytes = MAX_REDDIT_EVENT_DETAILS_BYTES + 1;
+  }
+  if (detailsBytes > MAX_REDDIT_EVENT_DETAILS_BYTES) {
+    res.status(413).json({ ok: false, error: "Reddit event details exceed the 64 KiB limit." });
+    return;
+  }
   if (!event) {
     res.status(400).json({
       ok: false,
-      error: "Expected type 'post' or 'comment', status 'pending' if supplied, a valid createdAt, 1 to 100 IDs, and object details. Comment events must include postId and subreddit (or details.post.subreddit).",
+      error: "Expected type 'post' or 'comment', status 'pending' if supplied, a valid createdAt, 1 to 100 IDs no longer than 128 characters, and object details. Comment events must include postId and subreddit (or details.post.subreddit).",
     });
     return;
   }

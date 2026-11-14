@@ -345,7 +345,7 @@ async function executeStreamMessage(message: StreamMessage, acknowledgeGroup?: s
   }
   const executionKey = optionalText(action.details, "draftId") ?? action.actionId;
   const lockKey = `sageposter:reddit:action-lock:${executionKey}`;
-  const locked = await redis.set(lockKey, consumerName, "NX", "EX", 1_800);
+  const locked = await redis.set(lockKey, consumerName, "EX", 1_800, "NX");
   if (locked !== "OK") throw new Error(`Reddit action ${action.actionId} is already being executed`);
   try {
     const outcome = await executeAction(action);
