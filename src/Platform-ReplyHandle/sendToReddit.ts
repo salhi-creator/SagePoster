@@ -61,25 +61,52 @@ async function requestRedditService<T>(method: "GET" | "POST", path: string, bod
   const url = endpoint(path);
   const token = process.env.REDDIT_SERVICE_TOKEN?.trim();
   const startedAt = Date.now();
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers: {
-        ...(method === "POST" ? { "content-type": "application/json" } : {}),
-        ...(token ? { authorization: `Bearer ${token}` } : {}),
-      },
-      ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
-    });
-  } catch (error) {
-    console.error("[Reddit service] Request failed before receiving a response", {
+  let response: Response | undefined;
+  const maxRateLimitRetries = method === "GET" ? 2 : 0;
+  for (let attempt = 0; attempt <= maxRateLimitRetries; attempt += 1) {
+    try {
+      response = await fetch(url, {
+        method,
+        headers: {
+          ...(method === "POST" ? { "content-type": "application/json" } : {}),
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch (error) {
+      console.error("[Reddit service] Request failed before receiving a response", {
+        method,
+        endpoint: safeEndpointPath(url),
+        attempt: attempt + 1,
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    if (response.status !== 429 || attempt >= maxRateLimitRetries) break;
+
+    const retryAfter = response.headers.get("retry-after");
+    const retryAfterSeconds = retryAfter && /^\d+(\.\d+)?$/.test(retryAfter)
+      ? Number(retryAfter)
+      : retryAfter && Number.isFinite(Date.parse(retryAfter))
+        ? Math.max(0, (Date.parse(retryAfter) - Date.now()) / 1000)
+        : undefined;
+    const delayMs = Math.min(
+      30_000,
+      Math.max(500, retryAfterSeconds === undefined ? 1_000 * (attempt + 1) : retryAfterSeconds * 1_000),
+    );
+    console.warn("[Reddit service] Rate limited; retrying safe GET", {
       method,
       endpoint: safeEndpointPath(url),
-      durationMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : String(error),
+      attempt: attempt + 1,
+      retryAfter,
+      delayMs,
     });
-    throw error;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
+
+  if (!response) throw new Error(`Reddit service ${method} ${safeEndpointPath(url)} returned no response`);
 
   const responseText = await response.text();
   let payload: (T & { error?: string; message?: string }) | Record<string, unknown> = {};
