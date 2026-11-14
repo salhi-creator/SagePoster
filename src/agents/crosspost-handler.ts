@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { Redis } from "ioredis";
 import { AIanswer } from "../AI.js";
 import {
-  checkRedditCrosspost,
+  getRedditAgentContext,
 } from "../Platform-ReplyHandle/sendToReddit.js";
 import {
   releaseRedditCrosspostReservation,
@@ -104,25 +104,29 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
     console.info("[Crosspost handler] Skipping same-subreddit target", { streamId });
     return;
   }
-  const request = {
-    sourcePostId: candidate.sourcePostId,
+  const checked = await getRedditAgentContext({
+    subreddit: candidate.sourceSubreddit,
+    postId: candidate.sourcePostId,
     targetSubreddit: candidate.targetSubreddit,
-    title: null,
-  };
-  const checked = await checkRedditCrosspost(request);
+    include: { post: true, rules: true, crosspostCheck: true },
+  });
+  if (!checked.post || !Array.isArray(checked.rules) || typeof checked.canCrosspost !== "boolean") {
+    throw new Error("Reddit service returned incomplete crosspost review context");
+  }
+  const targetSubreddit = checked.targetSubreddit ?? candidate.targetSubreddit;
   if (!checked.canCrosspost) {
     console.info("[Crosspost handler] Target does not allow crossposting", {
       streamId,
       sourcePostId: candidate.sourcePostId,
-      targetSubreddit: checked.targetSubreddit,
+      targetSubreddit,
     });
     return;
   }
 
   const review = await AIanswer(
     JSON.stringify({
-      sourcePost: checked.sourcePost,
-      targetSubreddit: checked.targetSubreddit,
+      sourcePost: checked.post,
+      targetSubreddit,
       rules: checked.rules,
     }),
     "reddit-crosspost-review",
@@ -131,7 +135,7 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
     console.info("[Crosspost handler] Rule review rejected the candidate", {
       streamId,
       sourcePostId: candidate.sourcePostId,
-      targetSubreddit: checked.targetSubreddit,
+      targetSubreddit,
       reason: typeof review?.reason === "string" ? review.reason : "No review result",
     });
     return;
@@ -139,13 +143,13 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
 
   const reservation = await reserveRedditCrosspost({
     sourcePostId: candidate.sourcePostId,
-    targetSubreddit: checked.targetSubreddit,
+    targetSubreddit,
   });
   if (reservation === "duplicate") return;
   if (reservation === "daily_limit") throw new RedditCrosspostDailyLimitError();
 
   const actionId = `reddit-crosspost-${createHash("sha256")
-    .update(`${candidate.sourcePostId}\0${checked.targetSubreddit.toLowerCase()}`)
+    .update(`${candidate.sourcePostId}\0${targetSubreddit.toLowerCase()}`)
     .digest("hex")
     .slice(0, 32)}`;
   let action: Awaited<ReturnType<typeof enqueueApprovedRedditAction>>;
@@ -156,20 +160,20 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
       details: {
         sourcePostId: candidate.sourcePostId,
         sourceSubreddit: candidate.sourceSubreddit,
-        targetSubreddit: checked.targetSubreddit,
-        title: request.title ?? checked.sourcePost.title,
-        content: checked.sourcePost.body?.trim() || checked.sourcePost.title,
+        targetSubreddit,
+        title: checked.post.title,
+        content: checked.post.content.trim() || checked.post.title,
         topic: candidate.topic,
       },
     });
   } catch (error) {
     await releaseRedditCrosspostReservation({
       sourcePostId: candidate.sourcePostId,
-      targetSubreddit: checked.targetSubreddit,
+      targetSubreddit,
     }).catch((releaseError) => {
       logError("Could not release crosspost reservation after action enqueue failure", releaseError, {
         sourcePostId: candidate.sourcePostId,
-        targetSubreddit: checked.targetSubreddit,
+      targetSubreddit,
       });
     });
     throw error;
@@ -178,7 +182,7 @@ async function crosspostApprovedPost(candidate: Candidate, streamId: string): Pr
     streamId,
     actionId: action.actionId,
     sourcePostId: candidate.sourcePostId,
-    targetSubreddit: checked.targetSubreddit,
+    targetSubreddit,
   });
 }
 

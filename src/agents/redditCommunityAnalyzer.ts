@@ -1,8 +1,6 @@
 import { AIanswer } from "../AI.js";
-import { getLatestPublishedRedditPostId } from "../SQL_DB/connectDB.js";
 import {
-  checkRedditCrosspost,
-  getRedditSubredditPosts,
+  getRedditAgentContext,
   type RedditCommunityPost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
 import { chunkRedditComments } from "./redditAiLimits.js";
@@ -46,30 +44,15 @@ export async function loadRedditCommunityContext(
   if (!subreddit) throw new Error("A subreddit is required for community analysis");
 
   const isOwnedCommunity = isOwnedRedditCommunity(subreddit);
-  const recentCommunityPosts = isOwnedCommunity
-    ? await getRedditSubredditPosts(subreddit, 12)
-    : [];
-
-  // The Devvit rules check requires a real source post ID. Use a listed post
-  // for an owned community, or one of our saved posts for an external target.
-  const sourcePostId =
-    recentCommunityPosts[0]?.postId ??
-    (await getLatestPublishedRedditPostId()) ??
-    (await getRedditSubredditPosts(subreddit, 1))[0]?.postId;
-  if (!sourcePostId) {
-    throw new Error(
-      "Cannot fetch subreddit rules: Devvit requires a source Reddit post ID, but none is available",
-    );
-  }
-
-  const checked = await checkRedditCrosspost({
-    sourcePostId,
-    targetSubreddit: subreddit,
-    title: null,
+  const context = await getRedditAgentContext({
+    subreddit,
+    include: { rules: true, recentPostsLimit: isOwnedCommunity ? 12 : 0 },
   });
+  if (!Array.isArray(context.rules)) throw new Error("Reddit service omitted requested subreddit rules");
+  const recentCommunityPosts = context.posts ?? [];
   return {
-    subreddit: checked.targetSubreddit,
-    rules: checked.rules,
+    subreddit: context.subreddit,
+    rules: context.rules,
     recentCommunityPosts,
     isOwnedCommunity,
   };
@@ -135,23 +118,22 @@ export async function reviewRedditPostEventAgainstCommunity(input: {
     throw new Error("A subreddit, Reddit post ID, and post title are required for post analysis");
   }
 
-  const checked = await checkRedditCrosspost({
-    sourcePostId: input.postId,
-    targetSubreddit: subreddit,
-    title: null,
+  const isOwnedCommunity = isOwnedRedditCommunity(subreddit);
+  const context = await getRedditAgentContext({
+    subreddit,
+    postId: input.postId,
+    include: { rules: true, recentPostsLimit: isOwnedCommunity ? 12 : 0 },
   });
-  const isOwnedCommunity = isOwnedRedditCommunity(checked.targetSubreddit);
-  const recentCommunityPosts = isOwnedCommunity
-    ? await getRedditSubredditPosts(checked.targetSubreddit, 12)
-    : [];
+  if (!Array.isArray(context.rules)) throw new Error("Reddit service omitted requested subreddit rules");
+  const recentCommunityPosts = context.posts ?? [];
   const normalizedPostId = input.postId.replace(/^t3_/i, "");
   const comparisonPosts = recentCommunityPosts.filter(
     (post) => post.postId.replace(/^t3_/i, "") !== normalizedPostId,
   );
   const result = await AIanswer(
     JSON.stringify({
-      subreddit: checked.targetSubreddit,
-      rules: checked.rules,
+      subreddit: context.subreddit,
+      rules: context.rules,
       isOwnedCommunity,
       recentCommunityPosts: comparisonPosts,
       candidatePost: {
@@ -164,11 +146,11 @@ export async function reviewRedditPostEventAgainstCommunity(input: {
   );
   const review = parseDraftReview(result);
   console.info("[Reddit community analyzer] Stream post review completed", {
-    subreddit: checked.targetSubreddit,
+    subreddit: context.subreddit,
     postId: input.postId,
     approved: review.approved,
     reason: review.reason,
-    ruleCount: checked.rules.length,
+    ruleCount: context.rules.length,
     recentCommunityPostCount: comparisonPosts.length,
   });
   return review;
@@ -183,14 +165,15 @@ export async function analyzeRedditCommentsAgainstRules(input: {
 }): Promise<RedditCommentRuleAnalysis> {
   if (!input.comments.length) return { approvedIds: [], rejectedIds: [], reasons: {} };
 
-  const checked = await checkRedditCrosspost({
-    sourcePostId: input.sourcePostId,
-    targetSubreddit: input.subreddit,
-    title: null,
+  const context = await getRedditAgentContext({
+    subreddit: input.subreddit,
+    postId: input.sourcePostId,
+    include: { rules: true },
   });
+  if (!Array.isArray(context.rules)) throw new Error("Reddit service omitted requested subreddit rules");
   const baseContext = {
-    subreddit: checked.targetSubreddit,
-    rules: checked.rules,
+    subreddit: context.subreddit,
+    rules: context.rules,
     post: input.post,
   };
   const approvedIds: string[] = [];
@@ -239,10 +222,10 @@ export async function analyzeRedditCommentsAgainstRules(input: {
   }
 
   console.info("[Reddit community analyzer] Comment screening completed", {
-    subreddit: checked.targetSubreddit,
+    subreddit: context.subreddit,
     approvedCount: approvedIds.length,
     rejectedCount: rejectedIds.length,
-    ruleCount: checked.rules.length,
+    ruleCount: context.rules.length,
   });
   return { approvedIds, rejectedIds, reasons };
 }

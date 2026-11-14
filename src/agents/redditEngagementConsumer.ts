@@ -2,8 +2,7 @@ import os from "node:os";
 import { Redis } from "ioredis";
 import { AIanswer } from "../AI.js";
 import {
-  getRedditPostComments,
-  getRedditPostById,
+  getRedditAgentContext,
   type RedditCommunityComment,
   type RedditCommunityPost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
@@ -168,9 +167,15 @@ async function getPostContext(event: EngagementEvent, id: string): Promise<PostC
 
   // Resolve the exact post by ID, then pair it with comments fetched for that
   // post. Do not guess context from a limited recent-post feed.
-  const post = await getRedditPostById(postId, subreddit);
-  const comments = await getRedditPostComments(postId, 100);
-  return { post, subreddit: post.subreddit || subreddit, comments };
+  const context = await getRedditAgentContext({
+    subreddit,
+    postId,
+    include: { post: true, commentsLimit: 100 },
+  });
+  if (!context.post || !Array.isArray(context.comments)) {
+    throw new Error(`Reddit service omitted requested post or comments for ${postId}`);
+  }
+  return { post: context.post, subreddit: context.post.subreddit || subreddit, comments: context.comments };
 }
 
 type GeneratedRedditReply = {

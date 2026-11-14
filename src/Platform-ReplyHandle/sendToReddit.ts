@@ -41,6 +41,24 @@ export type RedditCommunityComment = {
   removed: boolean;
 };
 
+export type RedditAgentContextRequest = {
+  subreddit: string;
+  include?: { rules?: boolean; recentPostsLimit?: number; post?: boolean; commentsLimit?: number; crosspostCheck?: boolean };
+  postId?: string;
+  targetSubreddit?: string;
+};
+
+export type RedditAgentContext = {
+  ok: true;
+  subreddit: string;
+  rules?: RedditCrosspostCheck["rules"];
+  posts?: RedditCommunityPost[];
+  post?: RedditCommunityPost;
+  comments?: RedditCommunityComment[];
+  canCrosspost?: boolean;
+  targetSubreddit?: string;
+};
+
 function endpoint(path: string): string {
   const baseUrl = process.env.REDDIT_SERVICE_URL?.trim().replace(/\/+$/, "");
   if (!baseUrl) throw new Error("REDDIT_SERVICE_URL is not configured");
@@ -152,6 +170,25 @@ async function request<T>(path: string, body: unknown): Promise<T> {
 
 async function requestGet<T>(path: string): Promise<T> {
   return requestRedditService<T>("GET", path);
+}
+
+/** Batch reads for Reddit agents; Devvit implements POST /agent/context. */
+export async function getRedditAgentContext(
+  input: RedditAgentContextRequest,
+): Promise<RedditAgentContext> {
+  const subreddit = input.subreddit.trim().replace(/^r\//i, "");
+  if (!subreddit) throw new Error("A subreddit is required for Reddit agent context");
+  const result = await request<RedditAgentContext>("/agent/context", {
+    ...input,
+    subreddit,
+    ...(input.targetSubreddit
+      ? { targetSubreddit: input.targetSubreddit.trim().replace(/^r\//i, "") }
+      : {}),
+  });
+  if (result?.ok !== true || !result.subreddit) {
+    throw new Error("Reddit service returned incomplete agent context");
+  }
+  return result;
 }
 
 function parseCommunityPost(value: unknown, requestedSubreddit: string): RedditCommunityPost | null {
