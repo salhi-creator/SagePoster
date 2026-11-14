@@ -47,40 +47,84 @@ function endpoint(path: string): string {
   return `${baseUrl}${path}`;
 }
 
-async function request<T>(path: string, body: unknown): Promise<T> {
-  const token = process.env.REDDIT_SERVICE_TOKEN?.trim();
-  const response = await fetch(endpoint(path), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json().catch(() => ({}))) as T & {
-    error?: string;
-  };
-  if (!response.ok) {
-    throw new Error(payload.error || `Reddit service returned HTTP ${response.status}`);
+function safeEndpointPath(url: string): string {
+  try {
+    const parsed = new URL(url);
+    // Keep route and query keys/values useful for diagnosis, but never print credentials.
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "<invalid-url>";
   }
-  return payload;
+}
+
+async function requestRedditService<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  const url = endpoint(path);
+  const token = process.env.REDDIT_SERVICE_TOKEN?.trim();
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        ...(method === "POST" ? { "content-type": "application/json" } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (error) {
+    console.error("[Reddit service] Request failed before receiving a response", {
+      method,
+      endpoint: safeEndpointPath(url),
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+
+  const responseText = await response.text();
+  let payload: (T & { error?: string; message?: string }) | Record<string, unknown> = {};
+  try {
+    payload = responseText ? JSON.parse(responseText) as T & { error?: string; message?: string } : {};
+  } catch {
+    payload = {};
+  }
+  const payloadRecord = payload as Record<string, unknown>;
+  const context = {
+    method,
+    endpoint: safeEndpointPath(url),
+    status: response.status,
+    durationMs: Date.now() - startedAt,
+    ...(response.headers.get("retry-after")
+      ? { retryAfter: response.headers.get("retry-after") }
+      : {}),
+  };
+
+  if (!response.ok) {
+    const serviceMessage = [payloadRecord.error, payloadRecord.message]
+      .find((value): value is string => typeof value === "string" && value.length > 0);
+    console.error("[Reddit service] Request returned an error", {
+      ...context,
+      ...(serviceMessage ? { serviceMessage: serviceMessage.slice(0, 500) } : {}),
+    });
+    const failure = new Error(
+      serviceMessage ?? `Reddit service ${method} ${safeEndpointPath(url)} returned HTTP ${response.status}`,
+    ) as Error & { status?: number; endpoint?: string; retryAfter?: string };
+    failure.status = response.status;
+    failure.endpoint = safeEndpointPath(url);
+    failure.retryAfter = response.headers.get("retry-after") ?? undefined;
+    throw failure;
+  }
+
+  console.info("[Reddit service] Request succeeded", context);
+  return payload as T;
+}
+
+async function request<T>(path: string, body: unknown): Promise<T> {
+  return requestRedditService<T>("POST", path, body);
 }
 
 async function requestGet<T>(path: string): Promise<T> {
-  const token = process.env.REDDIT_SERVICE_TOKEN?.trim();
-  const response = await fetch(endpoint(path), {
-    method: "GET",
-    headers: {
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-  });
-  const payload = (await response.json().catch(() => ({}))) as T & {
-    error?: string;
-  };
-  if (!response.ok) {
-    throw new Error(payload.error || `Reddit service returned HTTP ${response.status}`);
-  }
-  return payload;
+  return requestRedditService<T>("GET", path);
 }
 
 function parseCommunityPost(value: unknown, requestedSubreddit: string): RedditCommunityPost | null {
