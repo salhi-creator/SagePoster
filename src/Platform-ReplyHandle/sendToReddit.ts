@@ -321,6 +321,36 @@ export async function checkRedditCrosspost(
   };
 }
 
+/** Fetches one exact post through Devvit's sourcePost lookup in /crossposts/check. */
+export async function getRedditPostById(
+  postIdInput: string,
+  subredditInput: string,
+): Promise<RedditCommunityPost> {
+  const postId = postIdInput.trim();
+  const subreddit = subredditInput.trim().replace(/^r\//i, "");
+  if (!postId || !subreddit) {
+    throw new Error("A Reddit post ID and subreddit are required to fetch post context");
+  }
+
+  const checked = await checkRedditCrosspost({
+    sourcePostId: postId,
+    targetSubreddit: subreddit,
+    title: null,
+  });
+  const sourcePost = checked.sourcePost;
+  if (!sourcePost.title.trim()) {
+    throw new Error(`Reddit returned no title for post ${postId}`);
+  }
+  return {
+    postId: sourcePost.id,
+    title: sourcePost.title,
+    content: sourcePost.body ?? "",
+    subreddit: sourcePost.subreddit || subreddit,
+    url: sourcePost.url || null,
+    author: null,
+  };
+}
+
 export async function publishRedditCrosspost(
   input: RedditCrosspostRequest,
 ): Promise<{ crosspostId: string; targetSubreddit: string; url: string; permalink: string }> {

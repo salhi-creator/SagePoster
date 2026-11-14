@@ -3,7 +3,7 @@ import { Redis } from "ioredis";
 import { AIanswer } from "../AI.js";
 import {
   getRedditPostComments,
-  getRedditSubredditPosts,
+  getRedditPostById,
   type RedditCommunityComment,
   type RedditCommunityPost,
 } from "../Platform-ReplyHandle/sendToReddit.js";
@@ -45,6 +45,7 @@ type EngagementEvent = {
   status: "pending" | "approved";
   createdAt: string;
   ids: string[];
+  postId?: string;
   details: Record<string, unknown>;
 };
 type PostContext = {
@@ -105,6 +106,9 @@ function parseEvent(fields: Record<string, string>): EngagementEvent | null {
     status: fields.status,
     createdAt: fields.createdAt ?? "",
     ids,
+    ...(text(fields.postId) ?? text((details as Record<string, unknown>).postId)
+      ? { postId: text(fields.postId) ?? text((details as Record<string, unknown>).postId) }
+      : {}),
     details: details as Record<string, unknown>,
   };
 }
@@ -139,7 +143,7 @@ function randomSample<T>(items: T[]): T[] {
     const target = Math.floor(Math.random() * (index + 1));
     [shuffled[index], shuffled[target]] = [shuffled[target]!, shuffled[index]!];
   }
-  return shuffled.slice(0, Math.min(items.length, 3 + Math.floor(Math.random() * 6)));
+  return shuffled.slice(0, Math.min(items.length, 5 + Math.floor(Math.random() * 8)));
 }
 
 async function getPostContext(event: EngagementEvent, id: string): Promise<PostContext | null> {
@@ -152,59 +156,65 @@ async function getPostContext(event: EngagementEvent, id: string): Promise<PostC
     (event.type === "post" ? configuredSubreddit : undefined);
   const rawPostId = event.type === "post"
     ? id
-    : text(details.postId) ?? text(commentDetails.postId) ?? "";
+    : event.postId ?? text(details.postId) ?? text(commentDetails.postId) ?? "";
   if (!rawPostId) return null;
   const postId = asFullname(rawPostId, "post");
+  if (!subreddit) throw new Error(`Reddit event is missing the subreddit for post ${postId}`);
 
-  let post: RedditCommunityPost | Record<string, unknown> | undefined;
-  if (event.type === "post") {
-    if (!subreddit) return null;
-    const posts = await getRedditSubredditPosts(subreddit, 30);
-    post = posts.find((candidate) => asFullname(candidate.postId, "post") === postId);
-    if (!post && (text(postDetails.title) || text(details.title))) {
-      post = {
-        postId,
-        subreddit,
-        title: text(postDetails.title) ?? text(details.title) ?? "",
-        content: text(postDetails.body) ?? text(details.body) ?? "",
-        author: text(postDetails.author) ?? text(details.author) ?? null,
-      };
-    }
-  } else {
-    post = {
-      postId,
-      subreddit: subreddit ?? "",
-      title: text(postDetails.title) ?? text(details.title) ?? "",
-      content: text(postDetails.body) ?? text(details.body) ?? "",
-      author: text(postDetails.author) ?? null,
-    };
-  }
-  if (!post) return null;
-
+  // Resolve the exact post by ID, then pair it with comments fetched for that
+  // post. Do not guess context from a limited recent-post feed.
+  const post = await getRedditPostById(postId, subreddit);
   const comments = await getRedditPostComments(postId, 100);
-  const resolvedSubreddit = subreddit ?? ("subreddit" in post && typeof post.subreddit === "string" ? post.subreddit : "");
-  return { post, subreddit: resolvedSubreddit, comments };
+  return { post, subreddit: post.subreddit || subreddit, comments };
 }
 
-async function createReply(
+type GeneratedRedditReply = {
+  commentId: string;
+  shouldReply: boolean;
+  body: string;
+  reason: string;
+};
+
+async function createReplies(
   post: RedditCommunityPost | Record<string, unknown>,
-  targetComment: RedditCommunityComment,
+  targetComments: RedditCommunityComment[],
   nearbyComments: RedditCommunityComment[],
-): Promise<{ shouldReply: boolean; body: string; reason: string }> {
+): Promise<Map<string, GeneratedRedditReply>> {
   const result = await AIanswer(
-    JSON.stringify({ post, targetComment, nearbyComments }),
+    JSON.stringify({ parentPost: post, targetComments, nearbyComments }),
     "reddit-engagement-reply",
   );
-  if (!result || typeof result !== "object") throw new Error("Engagement AI returned no reply object");
+  if (!result || typeof result !== "object") throw new Error("Engagement AI returned no reply batch");
   const response = result as Record<string, unknown>;
-  if (typeof response.shouldReply !== "boolean" || typeof response.body !== "string") {
-    throw new Error("Engagement AI returned an invalid reply object");
+  if (!Array.isArray(response.replies)) {
+    throw new Error("Engagement AI returned no replies array");
   }
-  return {
-    shouldReply: response.shouldReply,
-    body: response.body.trim(),
-    reason: typeof response.reason === "string" ? response.reason : "",
-  };
+
+  const targetIds = new Set(targetComments.map((comment) => comment.commentId));
+  const replies = new Map<string, GeneratedRedditReply>();
+  for (const value of response.replies) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("Engagement AI returned a malformed reply item");
+    }
+    const item = value as Record<string, unknown>;
+    const commentId = typeof item.commentId === "string" ? item.commentId.trim() : "";
+    if (
+      !targetIds.has(commentId) || replies.has(commentId) ||
+      typeof item.shouldReply !== "boolean" || typeof item.body !== "string"
+    ) {
+      throw new Error("Engagement AI returned an invalid or duplicate comment reply");
+    }
+    replies.set(commentId, {
+      commentId,
+      shouldReply: item.shouldReply,
+      body: item.body.trim(),
+      reason: typeof item.reason === "string" ? item.reason : "",
+    });
+  }
+  if (replies.size !== targetIds.size) {
+    throw new Error("Engagement AI did not return a decision for every target comment");
+  }
+  return replies;
 }
 
 async function processActivity(
@@ -217,6 +227,21 @@ async function processActivity(
   if (stage === "community_analyzer" && event.status !== "pending") return;
   if (stage === "engagement" && event.status !== "approved") return;
 
+  // A comment event groups IDs from one parent post. Reuse one exact post and
+  // comment lookup for all those comments instead of fetching it per comment.
+  const contextCache = new Map<string, Promise<PostContext | null>>();
+  const loadContext = (sourceId: string): Promise<PostContext | null> => {
+    const parentId = event.type === "post"
+      ? asFullname(sourceId, "post")
+      : asFullname(event.postId ?? text(event.details.postId) ?? sourceId, "post");
+    let context = contextCache.get(parentId);
+    if (!context) {
+      context = getPostContext(event, sourceId);
+      contextCache.set(parentId, context);
+    }
+    return context;
+  };
+
   // A pending post event must pass the post-level community analyzer before
   // the engagement stage is allowed to inspect its comments.
   if (event.type === "post" && event.status === "pending") {
@@ -225,7 +250,7 @@ async function processActivity(
     const rejectionReasons: Record<string, string> = {};
     let resolvedSubreddit = "";
     for (const sourceId of event.ids) {
-      const context = await getPostContext(event, sourceId);
+      const context = await loadContext(sourceId);
       if (!context) throw new Error(`Could not load post context for ${sourceId}`);
       resolvedSubreddit = context.subreddit;
       if (await getRedditManagementMode(context.subreddit) !== "owner") {
@@ -284,7 +309,7 @@ async function processActivity(
 
   let repliesQueued = 0;
   for (const sourceId of event.ids) {
-    const context = await getPostContext(event, sourceId);
+    const context = await loadContext(sourceId);
     if (!context) {
       console.warn("[Reddit engagement] Event lacks required post/subreddit context", {
         type: event.type,
@@ -345,6 +370,7 @@ async function processActivity(
           status: "pending",
           createdAt: new Date().toISOString(),
           ids: selected.map((comment) => comment.commentId),
+          postId: sourcePostId,
           details: { subreddit: context.subreddit, postId: sourcePostId },
         });
       }
@@ -358,7 +384,7 @@ async function processActivity(
       continue;
     }
 
-    let approvedComments = selected;
+    const approvedComments = selected;
     if (needsCommentScreening) {
       const screening = await analyzeRedditCommentsAgainstRules({
         subreddit: context.subreddit,
@@ -400,12 +426,44 @@ async function processActivity(
       subreddit: context.subreddit,
     });
 
+    const claimedComments: RedditCommunityComment[] = [];
     for (const comment of approvedComments) {
-      if (!(await claimRedditEngagementComment(comment.commentId, context.subreddit))) continue;
+      if (await claimRedditEngagementComment(comment.commentId, context.subreddit)) {
+        claimedComments.push(comment);
+      }
+    }
+    if (!claimedComments.length) continue;
+
+    let repliesByComment: Map<string, GeneratedRedditReply>;
+    const targetCommentIds = new Set(claimedComments.map((comment) => comment.commentId));
+    try {
+      repliesByComment = await createReplies(
+        context.post,
+        claimedComments,
+        context.comments.filter((comment) => !targetCommentIds.has(comment.commentId)).slice(-12),
+      );
+    } catch (error) {
+      await Promise.all(claimedComments.map(async (comment) => {
+        await releaseRedditEngagementCommentClaim(comment.commentId).catch((releaseError) => {
+          logError("Could not release Reddit engagement claim after batch AI failure", releaseError, {
+            commentId: comment.commentId,
+          });
+        });
+      }));
+      logError("Reddit engagement reply batch failed", error, { streamId, subreddit: context.subreddit });
+      throw error;
+    }
+
+    for (let index = 0; index < claimedComments.length; index += 1) {
+      const comment = claimedComments[index]!;
+      const reply = repliesByComment.get(comment.commentId)!;
       try {
-        const reply = await createReply(context.post, comment, context.comments.slice(-12));
         if (!reply.shouldReply || !reply.body) {
-          await finishRedditEngagementComment({ commentId: comment.commentId, status: "skipped" });
+          await finishRedditEngagementComment({
+            commentId: comment.commentId,
+            status: "skipped",
+            reason: reply.reason,
+          });
           continue;
         }
         const queued = await enqueueApprovedRedditAction({
@@ -425,11 +483,13 @@ async function processActivity(
           subreddit: context.subreddit,
         });
       } catch (error) {
-        await releaseRedditEngagementCommentClaim(comment.commentId).catch((releaseError) => {
-          logError("Could not release Reddit engagement claim after action enqueue failure", releaseError, {
-            commentId: comment.commentId,
+        await Promise.all(claimedComments.slice(index).map(async (pendingComment) => {
+          await releaseRedditEngagementCommentClaim(pendingComment.commentId).catch((releaseError) => {
+            logError("Could not release Reddit engagement claim after reply enqueue failure", releaseError, {
+              commentId: pendingComment.commentId,
+            });
           });
-        });
+        }));
         logError("Reddit engagement reply failed", error, { commentId: comment.commentId, streamId });
         throw error;
       }

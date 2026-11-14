@@ -120,11 +120,10 @@ export async function enqueueRedditActivityEvent(input: {
   status: "pending";
   createdAt: string;
   ids: string[];
+  postId?: string;
   details: Record<string, unknown>;
 }): Promise<string> {
-  const streamId = await redis.xadd(
-    streamName,
-    "*",
+  const fields = [
     "event",
     `events-${input.type}`,
     "status",
@@ -137,7 +136,9 @@ export async function enqueueRedditActivityEvent(input: {
     JSON.stringify(input.ids),
     "details",
     JSON.stringify(input.details),
-  );
+  ];
+  if (input.postId?.trim()) fields.push("postId", input.postId.trim());
+  const streamId = await redis.xadd(streamName, "*", ...fields);
   if (!streamId) {
     throw new Error("Redis did not return an ID for the Reddit activity event");
   }

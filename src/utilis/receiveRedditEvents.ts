@@ -11,6 +11,7 @@ type RedditEventRequest = {
   createdAt: string;
   ids: string[];
   status: "pending";
+  postId?: string;
   details: Record<string, unknown>;
 };
 
@@ -49,12 +50,37 @@ function parseRedditEvent(body: unknown): RedditEventRequest | null {
     return null;
   }
 
+  const details = (event.details as Record<string, unknown> | undefined) ?? {};
+  const nestedPost = details.post && typeof details.post === "object" && !Array.isArray(details.post)
+    ? details.post as Record<string, unknown>
+    : {};
+  const requestedPostId = typeof event.postId === "string"
+    ? event.postId.trim()
+    : typeof details.postId === "string"
+      ? details.postId.trim()
+      : "";
+  const postId = event.type === "comment"
+    ? requestedPostId
+    : requestedPostId || (ids.length === 1 ? (ids[0] as string).trim() : "");
+  if (event.type === "comment" && !postId) return null;
+  if (event.type === "comment" &&
+      typeof details.subreddit !== "string" && typeof nestedPost.subreddit !== "string") {
+    return null;
+  }
+
   return {
     type: event.type,
     status: "pending",
     createdAt: createdAt.toISOString(),
     ids: ids.map((id) => id.trim()),
-    details: (event.details as Record<string, unknown> | undefined) ?? {},
+    ...(postId ? { postId } : {}),
+    details: {
+      ...details,
+      ...(postId ? { postId } : {}),
+      ...(typeof details.subreddit === "string" || typeof nestedPost.subreddit !== "string"
+        ? {}
+        : { subreddit: nestedPost.subreddit }),
+    },
   };
 }
 
@@ -85,7 +111,7 @@ const expectedToken = process.env.REDDIT_SERVICE_TOKEN?.trim();
   if (!event) {
     res.status(400).json({
       ok: false,
-      error: "Expected type 'post' or 'comment', status 'pending' if supplied, a valid createdAt, 1 to 100 IDs, and optional object details.",
+      error: "Expected type 'post' or 'comment', status 'pending' if supplied, a valid createdAt, 1 to 100 IDs, and object details. Comment events must include postId and subreddit (or details.post.subreddit).",
     });
     return;
   }
