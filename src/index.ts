@@ -35,6 +35,47 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3500;
+const healthPingIntervalMs = 20_000;
+let firstTelegramServerReachable: boolean | null = null;
+let firstTelegramServerLastPingAt: string | null = null;
+let firstTelegramServerLastError: string | null = null;
+
+async function pingFirstTelegramBot(): Promise<void> {
+  const healthUrl = process.env.FIRST_TELE_BOT?.trim();
+  if (!healthUrl) {
+    firstTelegramServerReachable = false;
+    firstTelegramServerLastError = "FIRST_TELE_BOT health URL is not configured";
+    console.warn("[Health ping] FIRST_TELE_BOT health URL is not configured");
+    return;
+  }
+
+  try {
+    const response = await fetch(`${healthUrl}/health`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    firstTelegramServerReachable = response.ok;
+    firstTelegramServerLastPingAt = new Date().toISOString();
+    firstTelegramServerLastError = firstTelegramServerReachable
+      ? null
+      : `Health endpoint returned HTTP ${response.status}`;
+    if (firstTelegramServerReachable) {
+      console.info("[Health ping] FIRST_TELE_BOT server reachable", {
+        checkedAt: firstTelegramServerLastPingAt,
+      });
+    } else {
+      console.warn("[Health ping] FIRST_TELE_BOT server check failed", {
+        error: firstTelegramServerLastError,
+      });
+    }
+  } catch (error) {
+    firstTelegramServerReachable = false;
+    firstTelegramServerLastPingAt = new Date().toISOString();
+    firstTelegramServerLastError = error instanceof Error ? error.message : String(error);
+    console.warn("[Health ping] FIRST_TELE_BOT server request failed", {
+      error: firstTelegramServerLastError,
+    });
+  }
+}
 
 app.use(express.json());
 
@@ -42,13 +83,20 @@ const server = http.createServer(app);
 
 server.listen(port, () => {
   console.log(`Bot server is working on port ${port}`);
+  void pingFirstTelegramBot();
+  setInterval(() => void pingFirstTelegramBot(), healthPingIntervalMs).unref();
 });
 
-app.get("/SagePosterhealth", (_req, res) => {
+app.get(["/health", "/SagePosterhealth"], (_req, res) => {
   res.status(200).json({
     status: "ok",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+    firstTelegramServer: {
+      reachable: firstTelegramServerReachable,
+      lastPingAt: firstTelegramServerLastPingAt,
+      lastError: firstTelegramServerLastError,
+    },
   });
 });
 
